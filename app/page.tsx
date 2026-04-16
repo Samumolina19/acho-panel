@@ -70,16 +70,11 @@ function fromInputDateTime(value: string) {
 }
 
 function isDeviceReallyOnline(device: Device) {
-  if (!device.is_online) return false;
-
-  const referenceDate = device.current_updated_at || device.last_seen;
-  if (!referenceDate) return false;
-
-  const updatedAt = new Date(referenceDate).getTime();
+  if (!device.is_online || !device.current_updated_at) return false;
+  const updatedAt = new Date(device.current_updated_at).getTime();
   const now = Date.now();
   const diffSeconds = (now - updatedAt) / 1000;
-
-  return diffSeconds <= 90;
+  return diffSeconds <= 40;
 }
 
 function isDeviceExpired(device: Device) {
@@ -124,6 +119,12 @@ export default function Page() {
   const [manageListId, setManageListId] = useState("");
   const [manageExpiresAt, setManageExpiresAt] = useState("");
   const [manageIsPermanent, setManageIsPermanent] = useState(false);
+
+  const [manageEditingListId, setManageEditingListId] = useState<string | null>(null);
+  const [manageEditAlias, setManageEditAlias] = useState("");
+  const [manageEditServer, setManageEditServer] = useState("");
+  const [manageEditUsername, setManageEditUsername] = useState("");
+  const [manageEditPassword, setManageEditPassword] = useState("");
 
   const [remoteAlias, setRemoteAlias] = useState("");
   const [remoteServer, setRemoteServer] = useState("");
@@ -403,9 +404,53 @@ export default function Page() {
     return devices.find((d) => d.id === deviceId);
   }
 
+  function openListEditor(list: XtreamList) {
+    startEditList(list);
+    setManageDeviceId(null);
+    setActiveTab("lists");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function startManageEditList(list: XtreamList) {
+    setManageEditingListId(list.id);
+    setManageEditAlias(list.alias);
+    setManageEditServer(list.server);
+    setManageEditUsername(list.username);
+    setManageEditPassword(list.password);
+  }
+
+  function cancelManageEditList() {
+    setManageEditingListId(null);
+    setManageEditAlias("");
+    setManageEditServer("");
+    setManageEditUsername("");
+    setManageEditPassword("");
+  }
+
+  async function saveManageEditedList(id: string) {
+    if (!manageEditAlias || !manageEditServer || !manageEditUsername || !manageEditPassword) {
+      return alert("Completa todos los campos para editar la lista");
+    }
+
+    const { error } = await supabase
+      .from("xtream_lists")
+      .update({
+        alias: manageEditAlias,
+        server: manageEditServer,
+        username: manageEditUsername,
+        password: manageEditPassword,
+      })
+      .eq("id", id);
+
+    if (error) return alert(error.message);
+    cancelManageEditList();
+    loadAll();
+  }
+
   function openManageDevice(device: Device) {
     setManageDeviceId(device.id);
     setManageListId("");
+    cancelManageEditList();
     setRemoteAlias("");
     setRemoteServer("");
     setRemoteUsername("");
@@ -541,6 +586,12 @@ export default function Page() {
           <div style={styles.stackList}>
             <div style={styles.filterRowBetween}>
               <label style={styles.checkboxLabel}>
+                <span style={styles.helperMini}>Pulsa Editar y la lista subirá arriba automáticamente.</span>
+              </label>
+            </div>
+
+            <div style={styles.filterRowBetween}>
+              <label style={styles.checkboxLabel}>
                 <input
                   type="checkbox"
                   checked={showOnlyActiveLists}
@@ -560,7 +611,13 @@ export default function Page() {
               <button type="submit" style={styles.buttonPrimary}>Guardar lista</button>
             </form>
 
-            {filteredLists.map((list) => (
+            {[...filteredLists]
+              .sort((a, b) => {
+                if (a.id === editingListId) return -1;
+                if (b.id === editingListId) return 1;
+                return 0;
+              })
+              .map((list) => (
               <div key={list.id} style={styles.mobileCard}>
                 {editingListId === list.id ? (
                   <>
@@ -709,16 +766,58 @@ export default function Page() {
                   ) : (
                     managedDeviceAssignments.map((a) => {
                       const list = getList(a.xtream_list_id);
+                      if (!list) return null;
+
+                      const isEditingThis = manageEditingListId === list.id;
+
                       return (
                         <div key={a.id} style={styles.mobileCardMini}>
-                          <div>
-                            <div style={styles.cardTitleSmall}>{list?.alias || "Sin alias"}</div>
-                            <div style={styles.cardSubSmall}>{list?.server || "-"}</div>
-                          </div>
-                          <div style={styles.rowButtonsCompact}>
-                            {list && <button onClick={() => startEditList(list)} style={styles.smallSecondaryButton}>Editar</button>}
-                            <button onClick={() => deleteAssignment(a.id)} style={styles.smallDangerButton}>Quitar</button>
-                          </div>
+                          {isEditingThis ? (
+                            <div style={styles.formMobileStack}>
+                              <input
+                                value={manageEditAlias}
+                                onChange={(e) => setManageEditAlias(e.target.value)}
+                                placeholder="Alias"
+                                style={styles.input}
+                              />
+                              <input
+                                value={manageEditServer}
+                                onChange={(e) => setManageEditServer(e.target.value)}
+                                placeholder="Servidor"
+                                style={styles.input}
+                              />
+                              <div style={styles.doubleRow}>
+                                <input
+                                  value={manageEditUsername}
+                                  onChange={(e) => setManageEditUsername(e.target.value)}
+                                  placeholder="Usuario"
+                                  style={styles.input}
+                                />
+                                <input
+                                  value={manageEditPassword}
+                                  onChange={(e) => setManageEditPassword(e.target.value)}
+                                  placeholder="Contraseña"
+                                  style={styles.input}
+                                />
+                              </div>
+                              <div style={styles.rowButtonsCompact}>
+                                <button onClick={() => saveManageEditedList(list.id)} style={styles.smallPrimaryButton}>Guardar</button>
+                                <button onClick={cancelManageEditList} style={styles.smallSecondaryButton}>Cancelar</button>
+                                <button onClick={() => deleteAssignment(a.id)} style={styles.smallDangerButton}>Quitar</button>
+                              </div>
+                            </div>
+                          ) : (
+                            <>
+                              <div>
+                                <div style={styles.cardTitleSmall}>{list.alias || "Sin alias"}</div>
+                                <div style={styles.cardSubSmall}>{list.server || "-"}</div>
+                              </div>
+                              <div style={styles.rowButtonsCompact}>
+                                <button onClick={() => startManageEditList(list)} style={styles.smallSecondaryButton}>Editar</button>
+                                <button onClick={() => deleteAssignment(a.id)} style={styles.smallDangerButton}>Quitar</button>
+                              </div>
+                            </>
+                          )}
                         </div>
                       );
                     })
@@ -1046,6 +1145,10 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 999,
     fontSize: 11,
     fontWeight: 700,
+  },
+  helperMini: {
+    color: "#93c5fd",
+    fontSize: 12,
   },
   modalBackdrop: {
     position: "fixed",
