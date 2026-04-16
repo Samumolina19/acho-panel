@@ -70,11 +70,16 @@ function fromInputDateTime(value: string) {
 }
 
 function isDeviceReallyOnline(device: Device) {
-  if (!device.is_online || !device.current_updated_at) return false;
-  const updatedAt = new Date(device.current_updated_at).getTime();
+  if (!device.is_online) return false;
+
+  const referenceDate = device.current_updated_at || device.last_seen;
+  if (!referenceDate) return false;
+
+  const updatedAt = new Date(referenceDate).getTime();
   const now = Date.now();
   const diffSeconds = (now - updatedAt) / 1000;
-  return diffSeconds <= 40;
+
+  return diffSeconds <= 90;
 }
 
 function isDeviceExpired(device: Device) {
