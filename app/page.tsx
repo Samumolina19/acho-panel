@@ -16,6 +16,10 @@ type Device = {
   platform: string | null;
   app_version: string | null;
   is_active: boolean;
+  is_online?: boolean | null;
+  current_channel?: string | null;
+  current_content_type?: string | null;
+  current_updated_at?: string | null;
   last_seen?: string | null;
 };
 
@@ -43,6 +47,14 @@ function formatDate(value?: string | null) {
   } catch {
     return value;
   }
+}
+
+function isDeviceReallyOnline(device: Device) {
+  if (!device.is_online || !device.current_updated_at) return false;
+  const updatedAt = new Date(device.current_updated_at).getTime();
+  const now = Date.now();
+  const diffSeconds = (now - updatedAt) / 1000;
+  return diffSeconds <= 40;
 }
 
 export default function Page() {
@@ -79,6 +91,8 @@ export default function Page() {
   const [remoteUsername, setRemoteUsername] = useState("");
   const [remotePassword, setRemotePassword] = useState("");
 
+  const [, setNowTick] = useState(0);
+
   async function loadAll() {
     setLoading(true);
     setError("");
@@ -103,11 +117,39 @@ export default function Page() {
     loadAll();
   }, []);
 
+  useEffect(() => {
+    const channel = supabase
+      .channel("acho-realtime-panel")
+      .on("postgres_changes", { event: "*", schema: "public", table: "devices" }, () => loadAll())
+      .on("postgres_changes", { event: "*", schema: "public", table: "xtream_lists" }, () => loadAll())
+      .on("postgres_changes", { event: "*", schema: "public", table: "device_list_assignments" }, () => loadAll())
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setNowTick((v) => v + 1);
+    }, 10000);
+
+    return () => clearInterval(interval);
+  }, []);
+
   const filteredDevices = useMemo(() => {
     const q = search.trim().toLowerCase();
 
     return devices.filter((d) => {
-      const text = [d.display_code, d.device_name, d.device_code, d.platform]
+      const text = [
+        d.display_code,
+        d.device_name,
+        d.device_code,
+        d.platform,
+        d.current_channel,
+        d.current_content_type,
+      ]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
@@ -120,8 +162,14 @@ export default function Page() {
   }, [devices, search, showOnlyActiveDevices]);
 
   const filteredLists = useMemo(() => {
-    return lists.filter((l) => !showOnlyActiveLists || l.is_active);
-  }, [lists, showOnlyActiveLists]);
+    const q = search.trim().toLowerCase();
+    return lists.filter((l) => {
+      const matchesActive = !showOnlyActiveLists || l.is_active;
+      const text = [l.alias, l.server, l.username].filter(Boolean).join(" ").toLowerCase();
+      const matchesSearch = !q || text.includes(q);
+      return matchesActive && matchesSearch;
+    });
+  }, [lists, showOnlyActiveLists, search]);
 
   async function toggleDevice(id: string, active: boolean) {
     const { error } = await supabase.from("devices").update({ is_active: !active }).eq("id", id);
@@ -131,9 +179,7 @@ export default function Page() {
 
   async function createList(e: React.FormEvent) {
     e.preventDefault();
-    if (!alias || !server || !username || !password) {
-      return alert("Completa todos los campos de la lista");
-    }
+    if (!alias || !server || !username || !password) return alert("Completa todos los campos de la lista");
 
     const { error } = await supabase.from("xtream_lists").insert({
       alias,
@@ -197,20 +243,15 @@ export default function Page() {
       .eq("id", id);
 
     if (error) return alert(error.message);
-
     cancelEditList();
     loadAll();
   }
 
   async function assignList(e: React.FormEvent) {
     e.preventDefault();
-    if (!selectedDeviceId || !selectedListId) {
-      return alert("Selecciona dispositivo y lista");
-    }
+    if (!selectedDeviceId || !selectedListId) return alert("Selecciona dispositivo y lista");
 
-    const exists = assignments.some(
-      (a) => a.device_id === selectedDeviceId && a.xtream_list_id === selectedListId
-    );
+    const exists = assignments.some((a) => a.device_id === selectedDeviceId && a.xtream_list_id === selectedListId);
     if (exists) return alert("Esa lista ya está asignada a ese dispositivo");
 
     const { error } = await supabase.from("device_list_assignments").insert({
@@ -219,7 +260,6 @@ export default function Page() {
     });
 
     if (error) return alert(error.message);
-
     setSelectedDeviceId("");
     setSelectedListId("");
     loadAll();
@@ -228,9 +268,7 @@ export default function Page() {
   async function assignExistingListToDevice(deviceId: string, listId: string) {
     if (!deviceId || !listId) return;
 
-    const exists = assignments.some(
-      (a) => a.device_id === deviceId && a.xtream_list_id === listId
-    );
+    const exists = assignments.some((a) => a.device_id === deviceId && a.xtream_list_id === listId);
     if (exists) return alert("Esa lista ya está asignada a ese dispositivo");
 
     const { error } = await supabase.from("device_list_assignments").insert({
@@ -239,7 +277,6 @@ export default function Page() {
     });
 
     if (error) return alert(error.message);
-
     setManageListId("");
     loadAll();
   }
@@ -300,6 +337,8 @@ export default function Page() {
 
   const totalActiveDevices = devices.filter((d) => d.is_active).length;
   const totalActiveLists = lists.filter((l) => l.is_active).length;
+  const totalOnlineDevices = devices.filter((d) => isDeviceReallyOnline(d)).length;
+
   const managedDeviceAssignments = manageDeviceId ? getDeviceAssignments(manageDeviceId) : [];
   const availableListsForManagedDevice = manageDeviceId
     ? lists.filter((l) => !managedDeviceAssignments.some((a) => a.xtream_list_id === l.id))
@@ -308,113 +347,113 @@ export default function Page() {
   return (
     <div style={styles.page}>
       <div style={styles.container}>
-        <div style={styles.headerWrap}>
+        <div style={styles.headerCompact}>
           <div>
-            <h1 style={styles.title}>Panel Admin AchoTV</h1>
-            <p style={styles.subtitle}>
-              Gestión rápida de dispositivos y listas IPTV.
-            </p>
+            <h1 style={styles.title}>AchoTV Panel</h1>
+            <p style={styles.subtitle}>Control rápido desde móvil</p>
           </div>
-          <button onClick={loadAll} style={styles.buttonSecondary}>Recargar</button>
+          <button onClick={loadAll} style={styles.smallSecondaryButton}>Recargar</button>
         </div>
 
-        <div style={styles.statsGridCompact}>
-          <div style={styles.statCardCompact}><div style={styles.statLabel}>Dispositivos</div><div style={styles.statValueSmall}>{devices.length}</div></div>
-          <div style={styles.statCardCompact}><div style={styles.statLabel}>Activos</div><div style={styles.statValueSmall}>{totalActiveDevices}</div></div>
-          <div style={styles.statCardCompact}><div style={styles.statLabel}>Listas</div><div style={styles.statValueSmall}>{lists.length}</div></div>
-          <div style={styles.statCardCompact}><div style={styles.statLabel}>Listas activas</div><div style={styles.statValueSmall}>{totalActiveLists}</div></div>
+        <div style={styles.statsCompactRow}>
+          <div style={styles.miniStat}><span style={styles.miniStatLabel}>Disp.</span><span style={styles.miniStatValue}>{devices.length}</span></div>
+          <div style={styles.miniStat}><span style={styles.miniStatLabel}>Activos</span><span style={styles.miniStatValue}>{totalActiveDevices}</span></div>
+          <div style={styles.miniStat}><span style={styles.miniStatLabel}>Online</span><span style={styles.miniStatValue}>{totalOnlineDevices}</span></div>
+          <div style={styles.miniStat}><span style={styles.miniStatLabel}>Listas</span><span style={styles.miniStatValue}>{totalActiveLists}</span></div>
+        </div>
+
+        <div style={styles.stickyToolbar}>
+          <div style={styles.tabBarCompact}>
+            <button onClick={() => setActiveTab("devices")} style={activeTab === "devices" ? styles.tabButtonActive : styles.tabButton}>Disp.</button>
+            <button onClick={() => setActiveTab("lists")} style={activeTab === "lists" ? styles.tabButtonActive : styles.tabButton}>Listas</button>
+            <button onClick={() => setActiveTab("assignments")} style={activeTab === "assignments" ? styles.tabButtonActive : styles.tabButton}>Asig.</button>
+          </div>
+
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={activeTab === "devices" ? "Buscar dispositivo" : "Buscar lista"}
+            style={styles.inputCompactTop}
+          />
         </div>
 
         {loading && <p style={styles.info}>Cargando...</p>}
         {error && <p style={styles.error}>{error}</p>}
 
-        <div style={styles.tabBar}>
-          <button onClick={() => setActiveTab("devices")} style={activeTab === "devices" ? styles.tabButtonActive : styles.tabButton}>Dispositivos</button>
-          <button onClick={() => setActiveTab("lists")} style={activeTab === "lists" ? styles.tabButtonActive : styles.tabButton}>Listas</button>
-          <button onClick={() => setActiveTab("assignments")} style={activeTab === "assignments" ? styles.tabButtonActive : styles.tabButton}>Asignaciones</button>
-        </div>
-
         {activeTab === "devices" && (
-          <div style={{ ...styles.card, marginTop: 18 }}>
-            <div style={styles.sectionHeader}>
-              <h2 style={styles.h2NoMargin}>Dispositivos</h2>
-              <div style={styles.toolbarRight}>
+          <div style={styles.stackList}>
+            <div style={styles.filterRow}>
+              <label style={styles.checkboxLabel}>
                 <input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Buscar"
-                  style={{ ...styles.input, width: 220 }}
+                  type="checkbox"
+                  checked={showOnlyActiveDevices}
+                  onChange={(e) => setShowOnlyActiveDevices(e.target.checked)}
                 />
-                <label style={styles.checkboxLabel}>
-                  <input
-                    type="checkbox"
-                    checked={showOnlyActiveDevices}
-                    onChange={(e) => setShowOnlyActiveDevices(e.target.checked)}
-                  />
-                  Solo activos
-                </label>
-              </div>
+                Solo activos
+              </label>
             </div>
 
-            <div style={styles.compactTableWrap}>
-              <div style={styles.tableHeader}>
-                <div>Código</div>
-                <div>Nombre</div>
-                <div>Estado</div>
-                <div>Último acceso</div>
-                <div>Listas</div>
-                <div>Acciones</div>
-              </div>
-
-              {filteredDevices.map((device) => {
-                const deviceAssignments = getDeviceAssignments(device.id);
-                return (
-                  <div key={device.id} style={styles.tableRow}>
-                    <div style={styles.cellStrong}>{device.display_code || "-"}</div>
-                    <div>{device.device_name || "-"}</div>
+            {filteredDevices.map((device) => {
+              const deviceAssignments = getDeviceAssignments(device.id);
+              return (
+                <div key={device.id} style={styles.mobileCard}>
+                  <div style={styles.mobileCardTop}>
                     <div>
+                      <div style={styles.cardTitle}>{device.display_code || "-"}</div>
+                      <div style={styles.cardSub}>{device.device_name || "Sin nombre"}</div>
+                    </div>
+                    <div style={styles.badgeColumn}>
                       <span style={device.is_active ? styles.badgeActiveMini : styles.badgeBlockedMini}>
-                        {device.is_active ? "Activo" : "Bloqueado"}
+                        {device.is_active ? "Activo" : "Bloq."}
+                      </span>
+                      <span style={isDeviceReallyOnline(device) ? styles.badgeOnline : styles.badgeOffline}>
+                        {isDeviceReallyOnline(device) ? "Online" : "Offline"}
                       </span>
                     </div>
-                    <div>{formatDate(device.last_seen)}</div>
-                    <div style={styles.cellListNames}>
-                      {deviceAssignments.length === 0
-                        ? "Sin listas"
-                        : deviceAssignments.map((a) => getList(a.xtream_list_id)?.alias || "Sin alias").join(", ")}
-                    </div>
-                    <div style={styles.rowButtonsCompact}>
-                      <button onClick={() => toggleDevice(device.id, device.is_active)} style={styles.smallPrimaryButton}>
-                        {device.is_active ? "Off" : "On"}
-                      </button>
-                      <button
-                        onClick={() => {
-                          setManageDeviceId(device.id);
-                          setManageListId("");
-                          setRemoteAlias("");
-                          setRemoteServer("");
-                          setRemoteUsername("");
-                          setRemotePassword("");
-                        }}
-                        style={styles.smallSecondaryButton}
-                      >
-                        Nueva
-                      </button>
-                      <button onClick={() => { setManageDeviceId(device.id); setManageListId(""); }} style={styles.smallSecondaryButton}>
-                        Gestionar
-                      </button>
-                    </div>
                   </div>
-                );
-              })}
-            </div>
+
+                  <div style={styles.infoGridCompact}>
+                    <div><span style={styles.labelMini}>Viendo:</span> {device.current_channel ? `${device.current_channel}${device.current_content_type ? ` (${device.current_content_type})` : ""}` : "-"}</div>
+                    <div><span style={styles.labelMini}>Última:</span> {formatDate(device.current_updated_at || device.last_seen)}</div>
+                    <div><span style={styles.labelMini}>Listas:</span> {deviceAssignments.length === 0 ? "Sin listas" : deviceAssignments.map((a) => getList(a.xtream_list_id)?.alias || "Sin alias").join(", ")}</div>
+                  </div>
+
+                  <div style={styles.rowButtonsCompact}>
+                    <button onClick={() => toggleDevice(device.id, device.is_active)} style={styles.smallPrimaryButton}>
+                      {device.is_active ? "Off" : "On"}
+                    </button>
+                    <button
+                      onClick={() => {
+                        setManageDeviceId(device.id);
+                        setManageListId("");
+                        setRemoteAlias("");
+                        setRemoteServer("");
+                        setRemoteUsername("");
+                        setRemotePassword("");
+                      }}
+                      style={styles.smallSecondaryButton}
+                    >
+                      Nueva
+                    </button>
+                    <button
+                      onClick={() => {
+                        setManageDeviceId(device.id);
+                        setManageListId("");
+                      }}
+                      style={styles.smallSecondaryButton}
+                    >
+                      Gestionar
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
 
         {activeTab === "lists" && (
-          <div style={{ ...styles.card, marginTop: 18 }}>
-            <div style={styles.sectionHeader}>
-              <h2 style={styles.h2NoMargin}>Listas</h2>
+          <div style={styles.stackList}>
+            <div style={styles.filterRowBetween}>
               <label style={styles.checkboxLabel}>
                 <input
                   type="checkbox"
@@ -425,151 +464,124 @@ export default function Page() {
               </label>
             </div>
 
-            <div style={styles.gridCompactTop}>
-              <form onSubmit={createList} style={styles.formCompact}>
-                <input value={alias} onChange={(e) => setAlias(e.target.value)} placeholder="Alias" style={styles.input} />
-                <input value={server} onChange={(e) => setServer(e.target.value)} placeholder="Servidor" style={styles.input} />
+            <form onSubmit={createList} style={styles.formMobileStack}>
+              <input value={alias} onChange={(e) => setAlias(e.target.value)} placeholder="Alias" style={styles.input} />
+              <input value={server} onChange={(e) => setServer(e.target.value)} placeholder="Servidor" style={styles.input} />
+              <div style={styles.doubleRow}>
                 <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Usuario" style={styles.input} />
                 <input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Contraseña" style={styles.input} />
-                <button type="submit" style={styles.buttonPrimary}>Guardar</button>
-              </form>
-            </div>
-
-            <div style={styles.compactTableWrap}>
-              <div style={styles.tableHeaderLists}>
-                <div>Alias</div>
-                <div>Servidor</div>
-                <div>Usuario</div>
-                <div>Estado</div>
-                <div>Acciones</div>
               </div>
+              <button type="submit" style={styles.buttonPrimary}>Guardar lista</button>
+            </form>
 
-              {filteredLists.map((list) => (
-                <div key={list.id} style={styles.tableRowLists}>
-                  {editingListId === list.id ? (
-                    <>
-                      <div><input value={editAlias} onChange={(e) => setEditAlias(e.target.value)} style={styles.inputCompact} /></div>
-                      <div><input value={editServer} onChange={(e) => setEditServer(e.target.value)} style={styles.inputCompact} /></div>
-                      <div><input value={editUsername} onChange={(e) => setEditUsername(e.target.value)} style={styles.inputCompact} /></div>
+            {filteredLists.map((list) => (
+              <div key={list.id} style={styles.mobileCard}>
+                {editingListId === list.id ? (
+                  <>
+                    <input value={editAlias} onChange={(e) => setEditAlias(e.target.value)} style={styles.input} placeholder="Alias" />
+                    <input value={editServer} onChange={(e) => setEditServer(e.target.value)} style={styles.input} placeholder="Servidor" />
+                    <div style={styles.doubleRow}>
+                      <input value={editUsername} onChange={(e) => setEditUsername(e.target.value)} style={styles.input} placeholder="Usuario" />
+                      <input value={editPassword} onChange={(e) => setEditPassword(e.target.value)} style={styles.input} placeholder="Contraseña" />
+                    </div>
+                    <div style={styles.rowButtonsCompact}>
+                      <button onClick={() => saveEditedList(list.id)} style={styles.smallPrimaryButton}>Guardar</button>
+                      <button onClick={cancelEditList} style={styles.smallSecondaryButton}>Cancelar</button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div style={styles.mobileCardTop}>
                       <div>
-                        <span style={list.is_active ? styles.badgeActiveMini : styles.badgeBlockedMini}>
-                          {list.is_active ? "Activa" : "Inactiva"}
-                        </span>
+                        <div style={styles.cardTitle}>{list.alias}</div>
+                        <div style={styles.cardSub}>{list.server}</div>
                       </div>
-                      <div style={styles.rowButtonsCompact}>
-                        <button onClick={() => saveEditedList(list.id)} style={styles.smallPrimaryButton}>Guardar</button>
-                        <button onClick={cancelEditList} style={styles.smallSecondaryButton}>Cancelar</button>
-                      </div>
-                      <div style={styles.fullRowPassword}><input value={editPassword} onChange={(e) => setEditPassword(e.target.value)} placeholder="Contraseña" style={styles.inputCompactWide} /></div>
-                    </>
-                  ) : (
-                    <>
-                      <div style={styles.cellStrong}>{list.alias}</div>
-                      <div style={styles.cellEllipsis}>{list.server}</div>
-                      <div>{list.username}</div>
-                      <div>
-                        <span style={list.is_active ? styles.badgeActiveMini : styles.badgeBlockedMini}>
-                          {list.is_active ? "Activa" : "Inactiva"}
-                        </span>
-                      </div>
-                      <div style={styles.rowButtonsCompact}>
-                        <button onClick={() => startEditList(list)} style={styles.smallSecondaryButton}>Editar</button>
-                        <button onClick={() => toggleList(list.id, list.is_active)} style={styles.smallSecondaryButton}>
-                          {list.is_active ? "Off" : "On"}
-                        </button>
-                        <button onClick={() => deleteList(list.id)} style={styles.smallDangerButton}>Eliminar</button>
-                      </div>
-                    </>
-                  )}
-                </div>
-              ))}
-            </div>
+                      <span style={list.is_active ? styles.badgeActiveMini : styles.badgeBlockedMini}>
+                        {list.is_active ? "Activa" : "Inactiva"}
+                      </span>
+                    </div>
+                    <div style={styles.infoGridCompact}>
+                      <div><span style={styles.labelMini}>Usuario:</span> {list.username}</div>
+                      <div><span style={styles.labelMini}>Creada:</span> {formatDate(list.created_at)}</div>
+                    </div>
+                    <div style={styles.rowButtonsCompact}>
+                      <button onClick={() => startEditList(list)} style={styles.smallSecondaryButton}>Editar</button>
+                      <button onClick={() => toggleList(list.id, list.is_active)} style={styles.smallSecondaryButton}>{list.is_active ? "Off" : "On"}</button>
+                      <button onClick={() => deleteList(list.id)} style={styles.smallDangerButton}>Eliminar</button>
+                    </div>
+                  </>
+                )}
+              </div>
+            ))}
           </div>
         )}
 
         {activeTab === "assignments" && (
-          <div style={{ ...styles.card, marginTop: 18 }}>
-            <div style={styles.sectionHeader}>
-              <h2 style={styles.h2NoMargin}>Asignaciones</h2>
-            </div>
-
-            <form onSubmit={assignList} style={styles.assignmentBar}>
+          <div style={styles.stackList}>
+            <form onSubmit={assignList} style={styles.formMobileStack}>
               <select value={selectedDeviceId} onChange={(e) => setSelectedDeviceId(e.target.value)} style={styles.input}>
                 <option value="">Selecciona dispositivo</option>
                 {devices.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.display_code || d.device_name || d.id}
-                  </option>
+                  <option key={d.id} value={d.id}>{d.display_code || d.device_name || d.id}</option>
                 ))}
               </select>
 
               <select value={selectedListId} onChange={(e) => setSelectedListId(e.target.value)} style={styles.input}>
                 <option value="">Selecciona lista</option>
                 {lists.map((l) => (
-                  <option key={l.id} value={l.id}>
-                    {l.alias}
-                  </option>
+                  <option key={l.id} value={l.id}>{l.alias}</option>
                 ))}
               </select>
 
               <button type="submit" style={styles.buttonPrimary}>Asignar</button>
             </form>
 
-            <div style={styles.compactTableWrap}>
-              <div style={styles.tableHeaderAssignments}>
-                <div>Dispositivo</div>
-                <div>Lista</div>
-                <div>Servidor</div>
-                <div>Acción</div>
-              </div>
-
-              {assignments.map((a) => {
-                const device = getDeviceById(a.device_id);
-                const list = getList(a.xtream_list_id);
-                return (
-                  <div key={a.id} style={styles.tableRowAssignments}>
-                    <div>{device?.display_code || device?.device_name || "-"}</div>
-                    <div style={styles.cellStrong}>{list?.alias || "Sin alias"}</div>
-                    <div style={styles.cellEllipsis}>{list?.server || "-"}</div>
-                    <div>
-                      <button onClick={() => deleteAssignment(a.id)} style={styles.smallDangerButton}>Quitar</button>
-                    </div>
+            {assignments.map((a) => {
+              const device = getDeviceById(a.device_id);
+              const list = getList(a.xtream_list_id);
+              return (
+                <div key={a.id} style={styles.mobileCard}>
+                  <div style={styles.infoGridCompact}>
+                    <div><span style={styles.labelMini}>Disp.:</span> {device?.display_code || device?.device_name || "-"}</div>
+                    <div><span style={styles.labelMini}>Lista:</span> {list?.alias || "Sin alias"}</div>
+                    <div><span style={styles.labelMini}>Servidor:</span> {list?.server || "-"}</div>
                   </div>
-                );
-              })}
-            </div>
+                  <div style={styles.rowButtonsCompact}>
+                    <button onClick={() => deleteAssignment(a.id)} style={styles.smallDangerButton}>Quitar</button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
 
         {manageDeviceId && (
           <div style={styles.modalBackdrop} onClick={() => setManageDeviceId(null)}>
-            <div style={styles.modalCard} onClick={(e) => e.stopPropagation()}>
-              <div style={styles.modalHeader}>
+            <div style={styles.modalCardMobile} onClick={(e) => e.stopPropagation()}>
+              <div style={styles.modalHeaderCompact}>
                 <div>
-                  <div style={styles.modalTitle}>Gestionar listas del dispositivo</div>
-                  <div style={styles.modalSubtitle}>
-                    {getDeviceById(manageDeviceId)?.display_code || getDeviceById(manageDeviceId)?.device_name || manageDeviceId}
-                  </div>
+                  <div style={styles.modalTitle}>Gestionar listas</div>
+                  <div style={styles.modalSubtitle}>{getDeviceById(manageDeviceId)?.display_code || getDeviceById(manageDeviceId)?.device_name || manageDeviceId}</div>
                 </div>
                 <button onClick={() => setManageDeviceId(null)} style={styles.smallDangerButton}>Cerrar</button>
               </div>
 
               <div style={styles.modalSection}>
-                <div style={styles.subSectionTitle}>Añadir lista nueva al dispositivo</div>
-                <div style={styles.remoteFormGrid}>
+                <div style={styles.subSectionTitle}>Lista nueva</div>
+                <div style={styles.formMobileStack}>
                   <input value={remoteAlias} onChange={(e) => setRemoteAlias(e.target.value)} placeholder="Alias" style={styles.input} />
                   <input value={remoteServer} onChange={(e) => setRemoteServer(e.target.value)} placeholder="Servidor" style={styles.input} />
-                  <input value={remoteUsername} onChange={(e) => setRemoteUsername(e.target.value)} placeholder="Usuario" style={styles.input} />
-                  <input value={remotePassword} onChange={(e) => setRemotePassword(e.target.value)} placeholder="Contraseña" style={styles.input} />
-                </div>
-                <div style={{ marginTop: 10 }}>
+                  <div style={styles.doubleRow}>
+                    <input value={remoteUsername} onChange={(e) => setRemoteUsername(e.target.value)} placeholder="Usuario" style={styles.input} />
+                    <input value={remotePassword} onChange={(e) => setRemotePassword(e.target.value)} placeholder="Contraseña" style={styles.input} />
+                  </div>
                   <button onClick={() => addRemoteListToDevice(manageDeviceId)} style={styles.buttonPrimary}>Crear y asignar</button>
                 </div>
               </div>
 
               <div style={styles.modalSection}>
-                <div style={styles.subSectionTitle}>Añadir lista existente</div>
-                <div style={styles.manageBar}>
+                <div style={styles.subSectionTitle}>Añadir existente</div>
+                <div style={styles.formMobileStack}>
                   <select value={manageListId} onChange={(e) => setManageListId(e.target.value)} style={styles.input}>
                     <option value="">Selecciona lista</option>
                     {availableListsForManagedDevice.map((l) => (
@@ -589,13 +601,13 @@ export default function Page() {
                     managedDeviceAssignments.map((a) => {
                       const list = getList(a.xtream_list_id);
                       return (
-                        <div key={a.id} style={styles.assignmentRow}>
+                        <div key={a.id} style={styles.mobileCardMini}>
                           <div>
-                            <div style={{ fontWeight: 700 }}>{list?.alias || "Sin alias"}</div>
-                            <div style={styles.mutedSmall}>{list?.server || "-"}</div>
+                            <div style={styles.cardTitleSmall}>{list?.alias || "Sin alias"}</div>
+                            <div style={styles.cardSubSmall}>{list?.server || "-"}</div>
                           </div>
                           <div style={styles.rowButtonsCompact}>
-                            {list && <button onClick={() => startEditList(list)} style={styles.smallSecondaryButton}>Editar lista</button>}
+                            {list && <button onClick={() => startEditList(list)} style={styles.smallSecondaryButton}>Editar</button>}
                             <button onClick={() => deleteAssignment(a.id)} style={styles.smallDangerButton}>Quitar</button>
                           </div>
                         </div>
@@ -617,190 +629,233 @@ const styles: Record<string, React.CSSProperties> = {
     minHeight: "100vh",
     background: "linear-gradient(180deg, #081120 0%, #0b1220 100%)",
     color: "white",
-    padding: 24,
+    padding: 10,
     fontFamily: "Arial, sans-serif",
   },
   container: {
-    maxWidth: 1280,
+    maxWidth: 980,
     margin: "0 auto",
   },
-  headerWrap: {
+  headerCompact: {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
-    gap: 16,
-    flexWrap: "wrap",
-    marginBottom: 24,
+    gap: 10,
+    marginBottom: 10,
   },
   title: {
-    fontSize: 34,
+    fontSize: 24,
     fontWeight: 800,
-    marginBottom: 8,
+    margin: 0,
   },
   subtitle: {
     color: "#9fb0c8",
-    margin: 0,
-  },
-  statsGridCompact: {
-    display: "grid",
-    gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-    gap: 12,
-    marginBottom: 18,
-  },
-  statCardCompact: {
-    background: "#111827",
-    borderRadius: 16,
-    padding: 14,
-    border: "1px solid #1f2937",
-    boxShadow: "0 6px 18px rgba(0,0,0,0.16)",
-  },
-  statLabel: {
-    color: "#8ea0bb",
+    margin: "3px 0 0 0",
     fontSize: 13,
   },
-  statValueSmall: {
-    fontSize: 24,
-    fontWeight: 800,
-    marginTop: 6,
+  statsCompactRow: {
+    display: "grid",
+    gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+    gap: 8,
+    marginBottom: 10,
   },
-  card: {
+  miniStat: {
     background: "#111827",
-    borderRadius: 22,
-    padding: 20,
+    borderRadius: 12,
+    padding: "10px 8px",
     border: "1px solid #1f2937",
-    boxShadow: "0 10px 25px rgba(0,0,0,0.18)",
-  },
-  tabBar: {
     display: "flex",
-    gap: 10,
-    marginBottom: 12,
-    flexWrap: "wrap",
+    flexDirection: "column",
+    gap: 4,
+    alignItems: "center",
+  },
+  miniStatLabel: {
+    fontSize: 11,
+    color: "#8ea0bb",
+  },
+  miniStatValue: {
+    fontSize: 18,
+    fontWeight: 800,
+  },
+  stickyToolbar: {
+    position: "sticky",
+    top: 0,
+    zIndex: 5,
+    background: "rgba(8,17,32,0.95)",
+    backdropFilter: "blur(6px)",
+    paddingBottom: 8,
+    marginBottom: 10,
+  },
+  tabBarCompact: {
+    display: "grid",
+    gridTemplateColumns: "repeat(3, 1fr)",
+    gap: 6,
+    marginBottom: 8,
   },
   tabButton: {
-    padding: "10px 14px",
-    borderRadius: 12,
+    padding: "10px 8px",
+    borderRadius: 10,
     border: "1px solid #334155",
     background: "#111827",
     color: "#cbd5e1",
     cursor: "pointer",
     fontWeight: 700,
+    fontSize: 13,
   },
   tabButtonActive: {
-    padding: "10px 14px",
-    borderRadius: 12,
+    padding: "10px 8px",
+    borderRadius: 10,
     border: "1px solid #2563eb",
     background: "#1d4ed8",
     color: "white",
     cursor: "pointer",
     fontWeight: 700,
+    fontSize: 13,
   },
-  sectionHeader: {
+  inputCompactTop: {
+    width: "100%",
+    padding: 10,
+    borderRadius: 10,
+    border: "1px solid #334155",
+    background: "#0f172a",
+    color: "white",
+    outline: "none",
+    fontSize: 14,
+  },
+  stackList: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+  },
+  mobileCard: {
+    background: "#111827",
+    border: "1px solid #1f2937",
+    borderRadius: 14,
+    padding: 10,
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+  },
+  mobileCardMini: {
+    background: "#111827",
+    border: "1px solid #1f2937",
+    borderRadius: 12,
+    padding: 10,
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+  },
+  mobileCardTop: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 8,
+  },
+  badgeColumn: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+    alignItems: "flex-end",
+  },
+  cardTitle: {
+    fontWeight: 800,
+    fontSize: 17,
+    lineHeight: 1.1,
+  },
+  cardSub: {
+    fontSize: 12,
+    color: "#9fb0c8",
+    marginTop: 2,
+    lineHeight: 1.25,
+  },
+  cardTitleSmall: {
+    fontWeight: 700,
+    fontSize: 14,
+  },
+  cardSubSmall: {
+    fontSize: 12,
+    color: "#9fb0c8",
+    marginTop: 2,
+  },
+  infoGridCompact: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 4,
+    fontSize: 13,
+    color: "#e5edf9",
+    lineHeight: 1.3,
+  },
+  labelMini: {
+    color: "#8ea0bb",
+    fontWeight: 700,
+  },
+  filterRow: {
+    display: "flex",
+    justifyContent: "flex-end",
+  },
+  filterRowBetween: {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
-    gap: 12,
-    flexWrap: "wrap",
-    marginBottom: 14,
-  },
-  toolbarRight: {
-    display: "flex",
-    alignItems: "center",
-    gap: 10,
-    flexWrap: "wrap",
   },
   checkboxLabel: {
     display: "flex",
     alignItems: "center",
     gap: 8,
     color: "#cbd5e1",
-    fontSize: 14,
+    fontSize: 13,
   },
-  h2NoMargin: {
-    margin: 0,
-    fontSize: 22,
+  formMobileStack: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+    background: "#111827",
+    border: "1px solid #1f2937",
+    borderRadius: 14,
+    padding: 10,
   },
-  h2: {
-    marginBottom: 16,
-    fontSize: 22,
-  },
-  gridCompactTop: {
-    marginBottom: 16,
-  },
-  formCompact: {
+  doubleRow: {
     display: "grid",
-    gridTemplateColumns: "1fr 1.3fr 1fr 1fr auto",
-    gap: 10,
-    alignItems: "center",
-  },
-  assignmentBar: {
-    display: "grid",
-    gridTemplateColumns: "1fr 1fr auto",
-    gap: 10,
-    marginBottom: 16,
-    alignItems: "center",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 8,
   },
   input: {
-    padding: 12,
-    borderRadius: 12,
+    padding: 10,
+    borderRadius: 10,
     border: "1px solid #334155",
     background: "#0f172a",
     color: "white",
     outline: "none",
-  },
-  inputCompact: {
-    width: "100%",
-    padding: 8,
-    borderRadius: 10,
-    border: "1px solid #334155",
-    background: "#0b1220",
-    color: "white",
-    outline: "none",
-  },
-  inputCompactWide: {
-    width: "100%",
-    padding: 8,
-    borderRadius: 10,
-    border: "1px solid #334155",
-    background: "#0b1220",
-    color: "white",
-    outline: "none",
-    marginTop: 8,
+    fontSize: 14,
   },
   buttonPrimary: {
-    padding: "11px 16px",
-    borderRadius: 12,
+    padding: "10px 12px",
+    borderRadius: 10,
     border: "none",
     background: "#2563eb",
     color: "white",
     cursor: "pointer",
     fontWeight: 700,
+    fontSize: 13,
   },
   buttonSecondary: {
-    padding: "11px 16px",
-    borderRadius: 12,
+    padding: "10px 12px",
+    borderRadius: 10,
     border: "1px solid #334155",
     background: "#1e293b",
     color: "white",
     cursor: "pointer",
     fontWeight: 700,
-  },
-  buttonDanger: {
-    padding: "10px 14px",
-    borderRadius: 12,
-    border: "none",
-    background: "#dc2626",
-    color: "white",
-    cursor: "pointer",
-    fontWeight: 700,
+    fontSize: 13,
   },
   rowButtonsCompact: {
     display: "flex",
-    gap: 8,
+    gap: 6,
     flexWrap: "wrap",
   },
   smallPrimaryButton: {
     padding: "8px 10px",
-    borderRadius: 10,
+    borderRadius: 9,
     border: "none",
     background: "#2563eb",
     color: "white",
@@ -810,7 +865,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   smallSecondaryButton: {
     padding: "8px 10px",
-    borderRadius: 10,
+    borderRadius: 9,
     border: "1px solid #334155",
     background: "#1e293b",
     color: "white",
@@ -820,7 +875,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   smallDangerButton: {
     padding: "8px 10px",
-    borderRadius: 10,
+    borderRadius: 9,
     border: "none",
     background: "#dc2626",
     color: "white",
@@ -828,111 +883,92 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     fontSize: 12,
   },
-  compactTableWrap: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 8,
-  },
-  tableHeader: {
-    display: "grid",
-    gridTemplateColumns: "1.1fr 1.4fr 0.8fr 1fr 1.8fr 1fr",
-    gap: 12,
-    padding: "0 10px 8px 10px",
-    color: "#8ea0bb",
-    fontSize: 13,
-    fontWeight: 700,
-  },
-  tableRow: {
-    display: "grid",
-    gridTemplateColumns: "1.1fr 1.4fr 0.8fr 1fr 1.8fr 1fr",
-    gap: 12,
-    alignItems: "center",
-    background: "#0f172a",
-    border: "1px solid #1f2937",
-    borderRadius: 14,
-    padding: "12px 10px",
-    fontSize: 14,
-  },
-  tableHeaderLists: {
-    display: "grid",
-    gridTemplateColumns: "1fr 1.7fr 1fr 0.8fr 1fr",
-    gap: 12,
-    padding: "0 10px 8px 10px",
-    color: "#8ea0bb",
-    fontSize: 13,
-    fontWeight: 700,
-  },
-  tableRowLists: {
-    display: "grid",
-    gridTemplateColumns: "1fr 1.7fr 1fr 0.8fr 1fr",
-    gap: 12,
-    alignItems: "center",
-    background: "#0f172a",
-    border: "1px solid #1f2937",
-    borderRadius: 14,
-    padding: "12px 10px",
-    fontSize: 14,
-  },
-  tableHeaderAssignments: {
-    display: "grid",
-    gridTemplateColumns: "1.2fr 1fr 1.8fr 0.8fr",
-    gap: 12,
-    padding: "0 10px 8px 10px",
-    color: "#8ea0bb",
-    fontSize: 13,
-    fontWeight: 700,
-  },
-  tableRowAssignments: {
-    display: "grid",
-    gridTemplateColumns: "1.2fr 1fr 1.8fr 0.8fr",
-    gap: 12,
-    alignItems: "center",
-    background: "#0f172a",
-    border: "1px solid #1f2937",
-    borderRadius: 14,
-    padding: "12px 10px",
-    fontSize: 14,
-  },
-  cellStrong: {
-    fontWeight: 700,
-  },
-  cellEllipsis: {
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-  },
-  cellListNames: {
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-    color: "#dbe5f3",
-  },
   badgeActiveMini: {
     display: "inline-block",
     background: "#166534",
     color: "#dcfce7",
-    padding: "5px 9px",
+    padding: "5px 8px",
     borderRadius: 999,
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: 700,
   },
   badgeBlockedMini: {
     display: "inline-block",
     background: "#7f1d1d",
     color: "#fee2e2",
-    padding: "5px 9px",
+    padding: "5px 8px",
     borderRadius: 999,
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: 700,
+  },
+  badgeOnline: {
+    display: "inline-block",
+    background: "#065f46",
+    color: "#d1fae5",
+    padding: "5px 8px",
+    borderRadius: 999,
+    fontSize: 11,
+    fontWeight: 700,
+  },
+  badgeOffline: {
+    display: "inline-block",
+    background: "#374151",
+    color: "#e5e7eb",
+    padding: "5px 8px",
+    borderRadius: 999,
+    fontSize: 11,
+    fontWeight: 700,
+  },
+  modalBackdrop: {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(0,0,0,0.62)",
+    display: "flex",
+    alignItems: "flex-end",
+    justifyContent: "center",
+    padding: 0,
+    zIndex: 30,
+  },
+  modalCardMobile: {
+    width: "100%",
+    maxHeight: "92vh",
+    overflowY: "auto",
+    background: "#0f172a",
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    padding: 12,
+    border: "1px solid #1f2937",
+  },
+  modalHeaderCompact: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 8,
+    marginBottom: 10,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 800,
+  },
+  modalSubtitle: {
+    color: "#9fb0c8",
+    marginTop: 3,
+    fontSize: 12,
+  },
+  modalSection: {
+    marginTop: 12,
   },
   subSectionTitle: {
     fontWeight: 700,
     marginBottom: 8,
+    fontSize: 14,
+  },
+  listWrap: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
   },
   muted: {
-    color: "#94a3b8",
-  },
-  mutedSmall: {
     color: "#94a3b8",
     fontSize: 13,
   },
@@ -940,69 +976,52 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
-    gap: 12,
-    marginBottom: 10,
-    padding: 12,
+    gap: 10,
+    padding: 10,
     background: "#111827",
-    borderRadius: 14,
+    borderRadius: 12,
   },
-  fullRowPassword: {
-    gridColumn: "1 / -1",
-  },
-  modalBackdrop: {
-    position: "fixed",
-    inset: 0,
-    background: "rgba(0,0,0,0.55)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 20,
-  },
-  modalCard: {
+  compactTableWrap: { display: "none" },
+  tableHeaderWide: { display: "none" },
+  tableRowWide: { display: "none" },
+  tableHeaderLists: { display: "none" },
+  tableRowLists: { display: "none" },
+  tableHeaderAssignments: { display: "none" },
+  tableRowAssignments: { display: "none" },
+  card: { display: "none" },
+  h2NoMargin: { margin: 0 },
+  gridCompactTop: { marginBottom: 0 },
+  formCompact: { display: "none" },
+  assignmentBar: { display: "none" },
+  inputCompact: {
     width: "100%",
-    maxWidth: 760,
-    background: "#0f172a",
-    border: "1px solid #1f2937",
-    borderRadius: 20,
-    padding: 20,
-    boxShadow: "0 20px 50px rgba(0,0,0,0.35)",
+    padding: 10,
+    borderRadius: 10,
+    border: "1px solid #334155",
+    background: "#0b1220",
+    color: "white",
+    outline: "none",
   },
-  modalHeader: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    gap: 12,
-    marginBottom: 18,
+  inputCompactWide: {
+    width: "100%",
+    padding: 10,
+    borderRadius: 10,
+    border: "1px solid #334155",
+    background: "#0b1220",
+    color: "white",
+    outline: "none",
   },
-  modalTitle: {
-    fontSize: 22,
-    fontWeight: 800,
-  },
-  modalSubtitle: {
-    color: "#9fb0c8",
-    marginTop: 4,
-  },
-  modalSection: {
-    marginTop: 16,
-  },
-  manageBar: {
-    display: "grid",
-    gridTemplateColumns: "1fr auto",
-    gap: 10,
-    alignItems: "center",
-  },
-  remoteFormGrid: {
-    display: "grid",
-    gridTemplateColumns: "1fr 1.4fr 1fr 1fr",
-    gap: 10,
-    alignItems: "center",
-  },
+  cellStrong: { fontWeight: 700 },
+  cellEllipsis: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  cellListNames: { color: "#dbe5f3" },
   error: {
     color: "#fca5a5",
-    marginBottom: 12,
+    margin: "4px 0 10px 0",
+    fontSize: 13,
   },
   info: {
     color: "#cbd5e1",
-    marginBottom: 12,
+    margin: "4px 0 10px 0",
+    fontSize: 13,
   },
 };
