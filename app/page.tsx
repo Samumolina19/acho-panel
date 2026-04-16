@@ -21,6 +21,8 @@ type Device = {
   current_content_type?: string | null;
   current_updated_at?: string | null;
   last_seen?: string | null;
+  expires_at?: string | null;
+  is_permanent?: boolean | null;
 };
 
 type XtreamList = {
@@ -49,12 +51,40 @@ function formatDate(value?: string | null) {
   }
 }
 
+function toInputDateTime(value?: string | null) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const yyyy = date.getFullYear();
+  const mm = pad(date.getMonth() + 1);
+  const dd = pad(date.getDate());
+  const hh = pad(date.getHours());
+  const min = pad(date.getMinutes());
+  return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
+}
+
+function fromInputDateTime(value: string) {
+  if (!value) return null;
+  return new Date(value).toISOString();
+}
+
 function isDeviceReallyOnline(device: Device) {
   if (!device.is_online || !device.current_updated_at) return false;
   const updatedAt = new Date(device.current_updated_at).getTime();
   const now = Date.now();
   const diffSeconds = (now - updatedAt) / 1000;
   return diffSeconds <= 40;
+}
+
+function isDeviceExpired(device: Device) {
+  if (device.is_permanent) return false;
+  if (!device.expires_at) return false;
+  return new Date(device.expires_at).getTime() < Date.now();
+}
+
+function deviceSortValue(device: Device) {
+  return new Date(device.current_updated_at || device.last_seen || 0).getTime();
 }
 
 export default function Page() {
@@ -75,6 +105,8 @@ export default function Page() {
 
   const [activeTab, setActiveTab] = useState<"devices" | "lists" | "assignments">("devices");
   const [showOnlyActiveDevices, setShowOnlyActiveDevices] = useState(false);
+  const [showOnlyOnlineDevices, setShowOnlyOnlineDevices] = useState(false);
+  const [showOnlyExpiredDevices, setShowOnlyExpiredDevices] = useState(false);
   const [showOnlyActiveLists, setShowOnlyActiveLists] = useState(false);
 
   const [editingListId, setEditingListId] = useState<string | null>(null);
@@ -85,6 +117,8 @@ export default function Page() {
 
   const [manageDeviceId, setManageDeviceId] = useState<string | null>(null);
   const [manageListId, setManageListId] = useState("");
+  const [manageExpiresAt, setManageExpiresAt] = useState("");
+  const [manageIsPermanent, setManageIsPermanent] = useState(false);
 
   const [remoteAlias, setRemoteAlias] = useState("");
   const [remoteServer, setRemoteServer] = useState("");
@@ -141,25 +175,39 @@ export default function Page() {
   const filteredDevices = useMemo(() => {
     const q = search.trim().toLowerCase();
 
-    return devices.filter((d) => {
-      const text = [
-        d.display_code,
-        d.device_name,
-        d.device_code,
-        d.platform,
-        d.current_channel,
-        d.current_content_type,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
+    return [...devices]
+      .filter((d) => {
+        const text = [
+          d.display_code,
+          d.device_name,
+          d.device_code,
+          d.platform,
+          d.current_channel,
+          d.current_content_type,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
 
-      const matchesSearch = !q || text.includes(q);
-      const matchesActive = !showOnlyActiveDevices || d.is_active;
+        const matchesSearch = !q || text.includes(q);
+        const matchesActive = !showOnlyActiveDevices || d.is_active;
+        const matchesOnline = !showOnlyOnlineDevices || isDeviceReallyOnline(d);
+        const matchesExpired = !showOnlyExpiredDevices || isDeviceExpired(d);
 
-      return matchesSearch && matchesActive;
-    });
-  }, [devices, search, showOnlyActiveDevices]);
+        return matchesSearch && matchesActive && matchesOnline && matchesExpired;
+      })
+      .sort((a, b) => {
+        const aOnline = isDeviceReallyOnline(a) ? 1 : 0;
+        const bOnline = isDeviceReallyOnline(b) ? 1 : 0;
+        if (bOnline !== aOnline) return bOnline - aOnline;
+
+        const aActive = a.is_active ? 1 : 0;
+        const bActive = b.is_active ? 1 : 0;
+        if (bActive !== aActive) return bActive - aActive;
+
+        return deviceSortValue(b) - deviceSortValue(a);
+      });
+  }, [devices, search, showOnlyActiveDevices, showOnlyOnlineDevices, showOnlyExpiredDevices]);
 
   const filteredLists = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -175,6 +223,21 @@ export default function Page() {
     const { error } = await supabase.from("devices").update({ is_active: !active }).eq("id", id);
     if (error) return alert(error.message);
     loadAll();
+  }
+
+  async function saveDeviceAccess() {
+    if (!manageDeviceId) return;
+
+    const payload: { expires_at: string | null; is_permanent: boolean; is_active: boolean } = {
+      expires_at: manageIsPermanent ? null : fromInputDateTime(manageExpiresAt),
+      is_permanent: manageIsPermanent,
+      is_active: manageIsPermanent || !!manageExpiresAt,
+    };
+
+    const { error } = await supabase.from("devices").update(payload).eq("id", manageDeviceId);
+    if (error) return alert(error.message);
+    loadAll();
+    alert("Acceso actualizado");
   }
 
   async function createList(e: React.FormEvent) {
@@ -335,14 +398,28 @@ export default function Page() {
     return devices.find((d) => d.id === deviceId);
   }
 
+  function openManageDevice(device: Device) {
+    setManageDeviceId(device.id);
+    setManageListId("");
+    setRemoteAlias("");
+    setRemoteServer("");
+    setRemoteUsername("");
+    setRemotePassword("");
+    setManageExpiresAt(toInputDateTime(device.expires_at));
+    setManageIsPermanent(!!device.is_permanent);
+  }
+
   const totalActiveDevices = devices.filter((d) => d.is_active).length;
   const totalActiveLists = lists.filter((l) => l.is_active).length;
   const totalOnlineDevices = devices.filter((d) => isDeviceReallyOnline(d)).length;
+  const totalExpiredDevices = devices.filter((d) => isDeviceExpired(d)).length;
 
   const managedDeviceAssignments = manageDeviceId ? getDeviceAssignments(manageDeviceId) : [];
   const availableListsForManagedDevice = manageDeviceId
     ? lists.filter((l) => !managedDeviceAssignments.some((a) => a.xtream_list_id === l.id))
     : lists;
+
+  const managedDevice = manageDeviceId ? getDeviceById(manageDeviceId) : null;
 
   return (
     <div style={styles.page}>
@@ -359,7 +436,7 @@ export default function Page() {
           <div style={styles.miniStat}><span style={styles.miniStatLabel}>Disp.</span><span style={styles.miniStatValue}>{devices.length}</span></div>
           <div style={styles.miniStat}><span style={styles.miniStatLabel}>Activos</span><span style={styles.miniStatValue}>{totalActiveDevices}</span></div>
           <div style={styles.miniStat}><span style={styles.miniStatLabel}>Online</span><span style={styles.miniStatValue}>{totalOnlineDevices}</span></div>
-          <div style={styles.miniStat}><span style={styles.miniStatLabel}>Listas</span><span style={styles.miniStatValue}>{totalActiveLists}</span></div>
+          <div style={styles.miniStat}><span style={styles.miniStatLabel}>Caduc.</span><span style={styles.miniStatValue}>{totalExpiredDevices}</span></div>
         </div>
 
         <div style={styles.stickyToolbar}>
@@ -382,7 +459,7 @@ export default function Page() {
 
         {activeTab === "devices" && (
           <div style={styles.stackList}>
-            <div style={styles.filterRow}>
+            <div style={styles.filtersWrap}>
               <label style={styles.checkboxLabel}>
                 <input
                   type="checkbox"
@@ -390,6 +467,22 @@ export default function Page() {
                   onChange={(e) => setShowOnlyActiveDevices(e.target.checked)}
                 />
                 Solo activos
+              </label>
+              <label style={styles.checkboxLabel}>
+                <input
+                  type="checkbox"
+                  checked={showOnlyOnlineDevices}
+                  onChange={(e) => setShowOnlyOnlineDevices(e.target.checked)}
+                />
+                Solo online
+              </label>
+              <label style={styles.checkboxLabel}>
+                <input
+                  type="checkbox"
+                  checked={showOnlyExpiredDevices}
+                  onChange={(e) => setShowOnlyExpiredDevices(e.target.checked)}
+                />
+                Solo caducados
               </label>
             </div>
 
@@ -409,12 +502,20 @@ export default function Page() {
                       <span style={isDeviceReallyOnline(device) ? styles.badgeOnline : styles.badgeOffline}>
                         {isDeviceReallyOnline(device) ? "Online" : "Offline"}
                       </span>
+                      {device.is_permanent ? (
+                        <span style={styles.badgePermanent}>Permanente</span>
+                      ) : isDeviceExpired(device) ? (
+                        <span style={styles.badgeExpired}>Caducado</span>
+                      ) : device.expires_at ? (
+                        <span style={styles.badgeExpiry}>Con fecha</span>
+                      ) : null}
                     </div>
                   </div>
 
                   <div style={styles.infoGridCompact}>
                     <div><span style={styles.labelMini}>Viendo:</span> {device.current_channel ? `${device.current_channel}${device.current_content_type ? ` (${device.current_content_type})` : ""}` : "-"}</div>
                     <div><span style={styles.labelMini}>Última:</span> {formatDate(device.current_updated_at || device.last_seen)}</div>
+                    <div><span style={styles.labelMini}>Caduca:</span> {device.is_permanent ? "Nunca" : formatDate(device.expires_at)}</div>
                     <div><span style={styles.labelMini}>Listas:</span> {deviceAssignments.length === 0 ? "Sin listas" : deviceAssignments.map((a) => getList(a.xtream_list_id)?.alias || "Sin alias").join(", ")}</div>
                   </div>
 
@@ -422,28 +523,8 @@ export default function Page() {
                     <button onClick={() => toggleDevice(device.id, device.is_active)} style={styles.smallPrimaryButton}>
                       {device.is_active ? "Off" : "On"}
                     </button>
-                    <button
-                      onClick={() => {
-                        setManageDeviceId(device.id);
-                        setManageListId("");
-                        setRemoteAlias("");
-                        setRemoteServer("");
-                        setRemoteUsername("");
-                        setRemotePassword("");
-                      }}
-                      style={styles.smallSecondaryButton}
-                    >
-                      Nueva
-                    </button>
-                    <button
-                      onClick={() => {
-                        setManageDeviceId(device.id);
-                        setManageListId("");
-                      }}
-                      style={styles.smallSecondaryButton}
-                    >
-                      Gestionar
-                    </button>
+                    <button onClick={() => openManageDevice(device)} style={styles.smallSecondaryButton}>Nueva</button>
+                    <button onClick={() => openManageDevice(device)} style={styles.smallSecondaryButton}>Gestionar</button>
                   </div>
                 </div>
               );
@@ -561,9 +642,32 @@ export default function Page() {
               <div style={styles.modalHeaderCompact}>
                 <div>
                   <div style={styles.modalTitle}>Gestionar listas</div>
-                  <div style={styles.modalSubtitle}>{getDeviceById(manageDeviceId)?.display_code || getDeviceById(manageDeviceId)?.device_name || manageDeviceId}</div>
+                  <div style={styles.modalSubtitle}>{managedDevice?.display_code || managedDevice?.device_name || manageDeviceId}</div>
                 </div>
                 <button onClick={() => setManageDeviceId(null)} style={styles.smallDangerButton}>Cerrar</button>
+              </div>
+
+              <div style={styles.modalSection}>
+                <div style={styles.subSectionTitle}>Acceso</div>
+                <div style={styles.formMobileStack}>
+                  <label style={styles.checkboxLabel}>
+                    <input
+                      type="checkbox"
+                      checked={manageIsPermanent}
+                      onChange={(e) => setManageIsPermanent(e.target.checked)}
+                    />
+                    Activación permanente
+                  </label>
+                  {!manageIsPermanent && (
+                    <input
+                      type="datetime-local"
+                      value={manageExpiresAt}
+                      onChange={(e) => setManageExpiresAt(e.target.value)}
+                      style={styles.input}
+                    />
+                  )}
+                  <button onClick={saveDeviceAccess} style={styles.buttonPrimary}>Guardar acceso</button>
+                </div>
               </div>
 
               <div style={styles.modalSection}>
@@ -789,9 +893,11 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#8ea0bb",
     fontWeight: 700,
   },
-  filterRow: {
+  filtersWrap: {
     display: "flex",
-    justifyContent: "flex-end",
+    flexWrap: "wrap",
+    gap: 10,
+    marginBottom: 2,
   },
   filterRowBetween: {
     display: "flex",
@@ -833,16 +939,6 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 10,
     border: "none",
     background: "#2563eb",
-    color: "white",
-    cursor: "pointer",
-    fontWeight: 700,
-    fontSize: 13,
-  },
-  buttonSecondary: {
-    padding: "10px 12px",
-    borderRadius: 10,
-    border: "1px solid #334155",
-    background: "#1e293b",
     color: "white",
     cursor: "pointer",
     fontWeight: 700,
@@ -919,6 +1015,33 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 11,
     fontWeight: 700,
   },
+  badgePermanent: {
+    display: "inline-block",
+    background: "#1d4ed8",
+    color: "#dbeafe",
+    padding: "5px 8px",
+    borderRadius: 999,
+    fontSize: 11,
+    fontWeight: 700,
+  },
+  badgeExpired: {
+    display: "inline-block",
+    background: "#b91c1c",
+    color: "#fee2e2",
+    padding: "5px 8px",
+    borderRadius: 999,
+    fontSize: 11,
+    fontWeight: 700,
+  },
+  badgeExpiry: {
+    display: "inline-block",
+    background: "#7c3aed",
+    color: "#ede9fe",
+    padding: "5px 8px",
+    borderRadius: 999,
+    fontSize: 11,
+    fontWeight: 700,
+  },
   modalBackdrop: {
     position: "fixed",
     inset: 0,
@@ -972,48 +1095,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#94a3b8",
     fontSize: 13,
   },
-  assignmentRow: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    gap: 10,
-    padding: 10,
-    background: "#111827",
-    borderRadius: 12,
-  },
-  compactTableWrap: { display: "none" },
-  tableHeaderWide: { display: "none" },
-  tableRowWide: { display: "none" },
-  tableHeaderLists: { display: "none" },
-  tableRowLists: { display: "none" },
-  tableHeaderAssignments: { display: "none" },
-  tableRowAssignments: { display: "none" },
-  card: { display: "none" },
-  h2NoMargin: { margin: 0 },
-  gridCompactTop: { marginBottom: 0 },
-  formCompact: { display: "none" },
-  assignmentBar: { display: "none" },
-  inputCompact: {
-    width: "100%",
-    padding: 10,
-    borderRadius: 10,
-    border: "1px solid #334155",
-    background: "#0b1220",
-    color: "white",
-    outline: "none",
-  },
-  inputCompactWide: {
-    width: "100%",
-    padding: 10,
-    borderRadius: 10,
-    border: "1px solid #334155",
-    background: "#0b1220",
-    color: "white",
-    outline: "none",
-  },
-  cellStrong: { fontWeight: 700 },
-  cellEllipsis: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-  cellListNames: { color: "#dbe5f3" },
   error: {
     color: "#fca5a5",
     margin: "4px 0 10px 0",
