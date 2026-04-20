@@ -70,11 +70,20 @@ function fromInputDateTime(value: string) {
 }
 
 function isDeviceReallyOnline(device: Device) {
-  if (!device.is_online || !device.current_updated_at) return false;
-  const updatedAt = new Date(device.current_updated_at).getTime();
+  if (!device.is_online) return false;
+
+  const referenceDate =
+    device.current_updated_at ||
+    device.last_seen ||
+    null;
+
+  if (!referenceDate) return false;
+
+  const updatedAt = new Date(referenceDate).getTime();
   const now = Date.now();
   const diffSeconds = (now - updatedAt) / 1000;
-  return diffSeconds <= 40;
+
+  return diffSeconds <= 120;
 }
 
 function isDeviceExpired(device: Device) {
@@ -563,11 +572,20 @@ export default function Page() {
                   </div>
 
                   <div style={styles.infoGridCompact}>
-                    <div><span style={styles.labelMini}>Viendo:</span> {device.current_channel ? `${device.current_channel}${device.current_content_type ? ` (${device.current_content_type})` : ""}` : "-"}</div>
-                    <div><span style={styles.labelMini}>Última:</span> {formatDate(device.current_updated_at || device.last_seen)}</div>
-                    <div><span style={styles.labelMini}>Caduca:</span> {device.is_permanent ? "Nunca" : formatDate(device.expires_at)}</div>
-                    <div><span style={styles.labelMini}>Listas:</span> {deviceAssignments.length === 0 ? "Sin listas" : deviceAssignments.map((a) => getList(a.xtream_list_id)?.alias || "Sin alias").join(", ")}</div>
-                  </div>
+  <div>
+    <span style={styles.labelMini}>Viendo:</span>{" "}
+    {isDeviceReallyOnline(device)
+      ? (
+          device.current_channel
+            ? `${device.current_channel}${device.current_content_type ? ` (${device.current_content_type})` : ""}`
+            : "Viendo contenido..."
+        )
+      : "Offline"}
+  </div>
+  <div><span style={styles.labelMini}>Última:</span> {formatDate(device.current_updated_at || device.last_seen)}</div>
+  <div><span style={styles.labelMini}>Caduca:</span> {device.is_permanent ? "Nunca" : formatDate(device.expires_at)}</div>
+  <div><span style={styles.labelMini}>Listas:</span> {deviceAssignments.length === 0 ? "Sin listas" : deviceAssignments.map((a) => getList(a.xtream_list_id)?.alias || "Sin alias").join(", ")}</div>
+</div>
 
                   <div style={styles.rowButtonsCompact}>
                     <button onClick={() => toggleDevice(device.id, device.is_active)} style={styles.smallPrimaryButton}>
