@@ -21,6 +21,9 @@ type Device = {
   current_content_type?: string | null;
   current_updated_at?: string | null;
   last_seen?: string | null;
+  heartbeat_at?: string | null;
+  playback_state?: string | null;
+  app_state?: string | null;
   expires_at?: string | null;
   is_permanent?: boolean | null;
 };
@@ -70,9 +73,8 @@ function fromInputDateTime(value: string) {
 }
 
 function isDeviceReallyOnline(device: Device) {
-  if (!device.is_online) return false;
-
   const referenceDate =
+    device.heartbeat_at ||
     device.current_updated_at ||
     device.last_seen ||
     null;
@@ -93,7 +95,26 @@ function isDeviceExpired(device: Device) {
 }
 
 function deviceSortValue(device: Device) {
-  return new Date(device.current_updated_at || device.last_seen || 0).getTime();
+  return new Date(
+    device.heartbeat_at || device.current_updated_at || device.last_seen || 0
+  ).getTime();
+}
+
+function getWatchingLabel(device: Device) {
+  if (!isDeviceReallyOnline(device)) return "Offline";
+
+  if (device.current_channel?.trim()) {
+    return device.current_content_type?.trim()
+      ? `${device.current_channel} (${device.current_content_type})`
+      : device.current_channel;
+  }
+
+  if (device.playback_state === "playing") return "Reproduciendo";
+  if (device.playback_state === "paused") return "Pausado";
+  if (device.playback_state === "buffering") return "Cargando...";
+  if (device.app_state === "background") return "En segundo plano";
+
+  return "Sin canal";
 }
 
 export default function Page() {
@@ -199,6 +220,8 @@ export default function Page() {
           d.platform,
           d.current_channel,
           d.current_content_type,
+          d.playback_state,
+          d.app_state,
         ]
           .filter(Boolean)
           .join(" ")
@@ -572,20 +595,27 @@ export default function Page() {
                   </div>
 
                   <div style={styles.infoGridCompact}>
-  <div>
-    <span style={styles.labelMini}>Viendo:</span>{" "}
-    {isDeviceReallyOnline(device)
-      ? (
-          device.current_channel
-            ? `${device.current_channel}${device.current_content_type ? ` (${device.current_content_type})` : ""}`
-            : "Viendo contenido..."
-        )
-      : "Offline"}
-  </div>
-  <div><span style={styles.labelMini}>Última:</span> {formatDate(device.current_updated_at || device.last_seen)}</div>
-  <div><span style={styles.labelMini}>Caduca:</span> {device.is_permanent ? "Nunca" : formatDate(device.expires_at)}</div>
-  <div><span style={styles.labelMini}>Listas:</span> {deviceAssignments.length === 0 ? "Sin listas" : deviceAssignments.map((a) => getList(a.xtream_list_id)?.alias || "Sin alias").join(", ")}</div>
-</div>
+                    <div>
+                      <span style={styles.labelMini}>Viendo:</span>{" "}
+                      {getWatchingLabel(device)}
+                    </div>
+                    <div>
+                      <span style={styles.labelMini}>Última:</span>{" "}
+                      {formatDate(device.heartbeat_at || device.current_updated_at || device.last_seen)}
+                    </div>
+                    <div>
+                      <span style={styles.labelMini}>Caduca:</span>{" "}
+                      {device.is_permanent ? "Nunca" : formatDate(device.expires_at)}
+                    </div>
+                    <div>
+                      <span style={styles.labelMini}>Listas:</span>{" "}
+                      {deviceAssignments.length === 0
+                        ? "Sin listas"
+                        : deviceAssignments
+                            .map((a) => getList(a.xtream_list_id)?.alias || "Sin alias")
+                            .join(", ")}
+                    </div>
+                  </div>
 
                   <div style={styles.rowButtonsCompact}>
                     <button onClick={() => toggleDevice(device.id, device.is_active)} style={styles.smallPrimaryButton}>
@@ -636,44 +666,44 @@ export default function Page() {
                 return 0;
               })
               .map((list) => (
-              <div key={list.id} style={styles.mobileCard}>
-                {editingListId === list.id ? (
-                  <>
-                    <input value={editAlias} onChange={(e) => setEditAlias(e.target.value)} style={styles.input} placeholder="Alias" />
-                    <input value={editServer} onChange={(e) => setEditServer(e.target.value)} style={styles.input} placeholder="Servidor" />
-                    <div style={styles.doubleRow}>
-                      <input value={editUsername} onChange={(e) => setEditUsername(e.target.value)} style={styles.input} placeholder="Usuario" />
-                      <input value={editPassword} onChange={(e) => setEditPassword(e.target.value)} style={styles.input} placeholder="Contraseña" />
-                    </div>
-                    <div style={styles.rowButtonsCompact}>
-                      <button onClick={() => saveEditedList(list.id)} style={styles.smallPrimaryButton}>Guardar</button>
-                      <button onClick={cancelEditList} style={styles.smallSecondaryButton}>Cancelar</button>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div style={styles.mobileCardTop}>
-                      <div>
-                        <div style={styles.cardTitle}>{list.alias}</div>
-                        <div style={styles.cardSub}>{list.server}</div>
+                <div key={list.id} style={styles.mobileCard}>
+                  {editingListId === list.id ? (
+                    <>
+                      <input value={editAlias} onChange={(e) => setEditAlias(e.target.value)} style={styles.input} placeholder="Alias" />
+                      <input value={editServer} onChange={(e) => setEditServer(e.target.value)} style={styles.input} placeholder="Servidor" />
+                      <div style={styles.doubleRow}>
+                        <input value={editUsername} onChange={(e) => setEditUsername(e.target.value)} style={styles.input} placeholder="Usuario" />
+                        <input value={editPassword} onChange={(e) => setEditPassword(e.target.value)} style={styles.input} placeholder="Contraseña" />
                       </div>
-                      <span style={list.is_active ? styles.badgeActiveMini : styles.badgeBlockedMini}>
-                        {list.is_active ? "Activa" : "Inactiva"}
-                      </span>
-                    </div>
-                    <div style={styles.infoGridCompact}>
-                      <div><span style={styles.labelMini}>Usuario:</span> {list.username}</div>
-                      <div><span style={styles.labelMini}>Creada:</span> {formatDate(list.created_at)}</div>
-                    </div>
-                    <div style={styles.rowButtonsCompact}>
-                      <button onClick={() => startEditList(list)} style={styles.smallSecondaryButton}>Editar</button>
-                      <button onClick={() => toggleList(list.id, list.is_active)} style={styles.smallSecondaryButton}>{list.is_active ? "Off" : "On"}</button>
-                      <button onClick={() => deleteList(list.id)} style={styles.smallDangerButton}>Eliminar</button>
-                    </div>
-                  </>
-                )}
-              </div>
-            ))}
+                      <div style={styles.rowButtonsCompact}>
+                        <button onClick={() => saveEditedList(list.id)} style={styles.smallPrimaryButton}>Guardar</button>
+                        <button onClick={cancelEditList} style={styles.smallSecondaryButton}>Cancelar</button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div style={styles.mobileCardTop}>
+                        <div>
+                          <div style={styles.cardTitle}>{list.alias}</div>
+                          <div style={styles.cardSub}>{list.server}</div>
+                        </div>
+                        <span style={list.is_active ? styles.badgeActiveMini : styles.badgeBlockedMini}>
+                          {list.is_active ? "Activa" : "Inactiva"}
+                        </span>
+                      </div>
+                      <div style={styles.infoGridCompact}>
+                        <div><span style={styles.labelMini}>Usuario:</span> {list.username}</div>
+                        <div><span style={styles.labelMini}>Creada:</span> {formatDate(list.created_at)}</div>
+                      </div>
+                      <div style={styles.rowButtonsCompact}>
+                        <button onClick={() => startEditList(list)} style={styles.smallSecondaryButton}>Editar</button>
+                        <button onClick={() => toggleList(list.id, list.is_active)} style={styles.smallSecondaryButton}>{list.is_active ? "Off" : "On"}</button>
+                        <button onClick={() => deleteList(list.id)} style={styles.smallDangerButton}>Eliminar</button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              ))}
           </div>
         )}
 
