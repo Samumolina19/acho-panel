@@ -4,8 +4,8 @@ import type { NextRequest } from "next/server";
 export function middleware(req: NextRequest) {
   const auth = req.headers.get("authorization");
 
-  const USER = process.env.BASIC_USER || "admin";
-  const PASS = process.env.BASIC_PASS || "cambia_esto_ya";
+  const USER = process.env.BASIC_USER || "samu";
+  const PASS = process.env.BASIC_PASS || "1208";
 
   if (auth) {
     const base64 = auth.split(" ")[1];
