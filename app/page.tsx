@@ -13,6 +13,7 @@ type Device = {
   device_code: string | null;
   display_code: string | null;
   device_name: string | null;
+  custom_alias?: string | null;
   platform: string | null;
   app_version: string | null;
   is_active: boolean;
@@ -117,6 +118,16 @@ function getWatchingLabel(device: Device) {
   return "Sin canal";
 }
 
+function getDeviceLabel(device: Device) {
+  return (
+    device.custom_alias?.trim() ||
+    device.display_code?.trim() ||
+    device.device_name?.trim() ||
+    device.device_code?.trim() ||
+    "Sin nombre"
+  );
+}
+
 export default function Page() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [lists, setLists] = useState<XtreamList[]>([]);
@@ -149,6 +160,7 @@ export default function Page() {
   const [manageListId, setManageListId] = useState("");
   const [manageExpiresAt, setManageExpiresAt] = useState("");
   const [manageIsPermanent, setManageIsPermanent] = useState(false);
+  const [manageDeviceAlias, setManageDeviceAlias] = useState("");
 
   const [manageEditingListId, setManageEditingListId] = useState<string | null>(null);
   const [manageEditAlias, setManageEditAlias] = useState("");
@@ -214,6 +226,7 @@ export default function Page() {
     return [...devices]
       .filter((d) => {
         const text = [
+          d.custom_alias,
           d.display_code,
           d.device_name,
           d.device_code,
@@ -266,10 +279,16 @@ export default function Page() {
   async function saveDeviceAccess() {
     if (!manageDeviceId) return;
 
-    const payload: { expires_at: string | null; is_permanent: boolean; is_active: boolean } = {
+    const payload: {
+      expires_at: string | null;
+      is_permanent: boolean;
+      is_active: boolean;
+      custom_alias: string | null;
+    } = {
       expires_at: manageIsPermanent ? null : fromInputDateTime(manageExpiresAt),
       is_permanent: manageIsPermanent,
       is_active: manageIsPermanent || !!manageExpiresAt,
+      custom_alias: manageDeviceAlias.trim() || null,
     };
 
     const { error } = await supabase.from("devices").update(payload).eq("id", manageDeviceId);
@@ -489,6 +508,7 @@ export default function Page() {
     setRemotePassword("");
     setManageExpiresAt(toInputDateTime(device.expires_at));
     setManageIsPermanent(!!device.is_permanent);
+    setManageDeviceAlias(device.custom_alias || "");
   }
 
   const totalActiveDevices = devices.filter((d) => d.is_active).length;
@@ -574,7 +594,10 @@ export default function Page() {
                 <div key={device.id} style={styles.mobileCard}>
                   <div style={styles.mobileCardTop}>
                     <div>
-                      <div style={styles.cardTitle}>{device.display_code || "-"}</div>
+                      <div style={styles.cardTitle}>{getDeviceLabel(device)}</div>
+                      <div style={styles.cardSub}>
+                        Código: {device.display_code || device.device_code || "-"}
+                      </div>
                       <div style={styles.cardSub}>{device.device_name || "Sin nombre"}</div>
                     </div>
                     <div style={styles.badgeColumn}>
@@ -713,7 +736,7 @@ export default function Page() {
               <select value={selectedDeviceId} onChange={(e) => setSelectedDeviceId(e.target.value)} style={styles.input}>
                 <option value="">Selecciona dispositivo</option>
                 {devices.map((d) => (
-                  <option key={d.id} value={d.id}>{d.display_code || d.device_name || d.id}</option>
+                  <option key={d.id} value={d.id}>{getDeviceLabel(d)}</option>
                 ))}
               </select>
 
@@ -733,7 +756,7 @@ export default function Page() {
               return (
                 <div key={a.id} style={styles.mobileCard}>
                   <div style={styles.infoGridCompact}>
-                    <div><span style={styles.labelMini}>Disp.:</span> {device?.display_code || device?.device_name || "-"}</div>
+                    <div><span style={styles.labelMini}>Disp.:</span> {device ? getDeviceLabel(device) : "-"}</div>
                     <div><span style={styles.labelMini}>Lista:</span> {list?.alias || "Sin alias"}</div>
                     <div><span style={styles.labelMini}>Servidor:</span> {list?.server || "-"}</div>
                   </div>
@@ -752,10 +775,44 @@ export default function Page() {
               <div style={styles.modalHeaderCompact}>
                 <div>
                   <div style={styles.modalTitle}>Gestionar listas</div>
-                  <div style={styles.modalSubtitle}>{managedDevice?.display_code || managedDevice?.device_name || manageDeviceId}</div>
+                  <div style={styles.modalSubtitle}>
+                    {managedDevice ? getDeviceLabel(managedDevice) : manageDeviceId}
+                  </div>
                 </div>
                 <button onClick={() => setManageDeviceId(null)} style={styles.smallDangerButton}>Cerrar</button>
               </div>
+
+              <div style={styles.modalSection}>
+  <div style={styles.subSectionTitle}>Alias del dispositivo</div>
+  <div style={styles.formMobileStack}>
+    <input
+      value={manageDeviceAlias}
+      onChange={(e) => setManageDeviceAlias(e.target.value)}
+      placeholder="Alias del dispositivo"
+      style={styles.input}
+    />
+    <button
+      onClick={async () => {
+        if (!manageDeviceId) return;
+
+        const { error } = await supabase
+          .from("devices")
+          .update({
+            custom_alias: manageDeviceAlias.trim() || null,
+          })
+          .eq("id", manageDeviceId);
+
+        if (error) return alert(error.message);
+
+        loadAll();
+        alert("Alias guardado");
+      }}
+      style={styles.buttonPrimary}
+    >
+      Guardar alias
+    </button>
+  </div>
+</div>
 
               <div style={styles.modalSection}>
                 <div style={styles.subSectionTitle}>Acceso</div>
@@ -883,179 +940,221 @@ export default function Page() {
 const styles: Record<string, React.CSSProperties> = {
   page: {
     minHeight: "100vh",
-    background: "linear-gradient(180deg, #081120 0%, #0b1220 100%)",
-    color: "white",
-    padding: 10,
-    fontFamily: "Arial, sans-serif",
+    background: "linear-gradient(180deg, #06101d 0%, #0b1220 45%, #0f172a 100%)",
+    color: "#ffffff",
+    padding: 16,
+    fontFamily: "Inter, Arial, sans-serif",
   },
+
   container: {
-    maxWidth: 980,
+    maxWidth: 1100,
     margin: "0 auto",
   },
+
   headerCompact: {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
-    gap: 10,
-    marginBottom: 10,
+    gap: 12,
+    marginBottom: 14,
+    padding: "6px 2px",
   },
+
   title: {
-    fontSize: 24,
+    fontSize: 30,
     fontWeight: 800,
     margin: 0,
+    letterSpacing: -0.5,
   },
+
   subtitle: {
-    color: "#9fb0c8",
-    margin: "3px 0 0 0",
-    fontSize: 13,
+    color: "#94a3b8",
+    margin: "4px 0 0 0",
+    fontSize: 14,
   },
+
   statsCompactRow: {
     display: "grid",
     gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-    gap: 8,
-    marginBottom: 10,
+    gap: 10,
+    marginBottom: 14,
   },
+
   miniStat: {
-    background: "#111827",
-    borderRadius: 12,
-    padding: "10px 8px",
-    border: "1px solid #1f2937",
+    background: "linear-gradient(180deg, #111827 0%, #0f172a 100%)",
+    borderRadius: 16,
+    padding: "14px 10px",
+    border: "1px solid #1e293b",
     display: "flex",
     flexDirection: "column",
-    gap: 4,
+    gap: 6,
     alignItems: "center",
+    boxShadow: "0 10px 24px rgba(0,0,0,0.18)",
   },
+
   miniStatLabel: {
-    fontSize: 11,
-    color: "#8ea0bb",
+    fontSize: 12,
+    color: "#94a3b8",
+    fontWeight: 600,
   },
+
   miniStatValue: {
-    fontSize: 18,
+    fontSize: 22,
     fontWeight: 800,
+    color: "#ffffff",
   },
+
   stickyToolbar: {
     position: "sticky",
     top: 0,
     zIndex: 5,
-    background: "rgba(8,17,32,0.95)",
-    backdropFilter: "blur(6px)",
-    paddingBottom: 8,
-    marginBottom: 10,
+    background: "rgba(6,16,29,0.88)",
+    backdropFilter: "blur(10px)",
+    padding: "8px 0 10px 0",
+    marginBottom: 14,
   },
+
   tabBarCompact: {
     display: "grid",
     gridTemplateColumns: "repeat(3, 1fr)",
-    gap: 6,
-    marginBottom: 8,
+    gap: 8,
+    marginBottom: 10,
   },
+
   tabButton: {
-    padding: "10px 8px",
-    borderRadius: 10,
+    padding: "12px 10px",
+    borderRadius: 12,
     border: "1px solid #334155",
     background: "#111827",
     color: "#cbd5e1",
     cursor: "pointer",
     fontWeight: 700,
     fontSize: 13,
+    transition: "all 0.2s ease",
   },
+
   tabButtonActive: {
-    padding: "10px 8px",
-    borderRadius: 10,
-    border: "1px solid #2563eb",
-    background: "#1d4ed8",
-    color: "white",
+    padding: "12px 10px",
+    borderRadius: 12,
+    border: "1px solid #3b82f6",
+    background: "linear-gradient(180deg, #2563eb 0%, #1d4ed8 100%)",
+    color: "#ffffff",
     cursor: "pointer",
-    fontWeight: 700,
+    fontWeight: 800,
     fontSize: 13,
+    boxShadow: "0 8px 20px rgba(37,99,235,0.35)",
   },
+
   inputCompactTop: {
     width: "100%",
-    padding: 10,
-    borderRadius: 10,
+    padding: 12,
+    borderRadius: 12,
     border: "1px solid #334155",
     background: "#0f172a",
     color: "white",
     outline: "none",
     fontSize: 14,
   },
+
   stackList: {
     display: "flex",
     flexDirection: "column",
-    gap: 8,
+    gap: 10,
   },
+
   mobileCard: {
-    background: "#111827",
+    background: "linear-gradient(180deg, #111827 0%, #0f172a 100%)",
     border: "1px solid #1f2937",
-    borderRadius: 14,
-    padding: 10,
+    borderRadius: 18,
+    padding: 14,
     display: "flex",
     flexDirection: "column",
-    gap: 8,
+    gap: 10,
+    boxShadow: "0 12px 30px rgba(0,0,0,0.18)",
   },
+
   mobileCardMini: {
     background: "#111827",
     border: "1px solid #1f2937",
-    borderRadius: 12,
-    padding: 10,
+    borderRadius: 14,
+    padding: 12,
     display: "flex",
     flexDirection: "column",
     gap: 8,
   },
+
   mobileCardTop: {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "flex-start",
-    gap: 8,
+    gap: 10,
   },
+
   badgeColumn: {
     display: "flex",
     flexDirection: "column",
     gap: 6,
     alignItems: "flex-end",
   },
+
   cardTitle: {
     fontWeight: 800,
-    fontSize: 17,
+    fontSize: 18,
     lineHeight: 1.1,
+    color: "#ffffff",
   },
+
   cardSub: {
-    fontSize: 12,
-    color: "#9fb0c8",
-    marginTop: 2,
-    lineHeight: 1.25,
+    fontSize: 13,
+    color: "#94a3b8",
+    marginTop: 4,
+    lineHeight: 1.35,
   },
+
   cardTitleSmall: {
     fontWeight: 700,
-    fontSize: 14,
+    fontSize: 15,
+    color: "#ffffff",
   },
+
   cardSubSmall: {
     fontSize: 12,
-    color: "#9fb0c8",
-    marginTop: 2,
+    color: "#94a3b8",
+    marginTop: 3,
   },
+
   infoGridCompact: {
     display: "flex",
     flexDirection: "column",
-    gap: 4,
+    gap: 6,
     fontSize: 13,
     color: "#e5edf9",
-    lineHeight: 1.3,
+    lineHeight: 1.4,
+    background: "rgba(255,255,255,0.02)",
+    border: "1px solid rgba(255,255,255,0.04)",
+    borderRadius: 12,
+    padding: 10,
   },
+
   labelMini: {
-    color: "#8ea0bb",
+    color: "#93c5fd",
     fontWeight: 700,
   },
+
   filtersWrap: {
     display: "flex",
     flexWrap: "wrap",
-    gap: 10,
-    marginBottom: 2,
+    gap: 12,
+    marginBottom: 4,
   },
+
   filterRowBetween: {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
+    gap: 12,
   },
+
   checkboxLabel: {
     display: "flex",
     alignItems: "center",
@@ -1063,57 +1162,66 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#cbd5e1",
     fontSize: 13,
   },
+
   formMobileStack: {
     display: "flex",
     flexDirection: "column",
-    gap: 8,
-    background: "#111827",
+    gap: 10,
+    background: "linear-gradient(180deg, #111827 0%, #0f172a 100%)",
     border: "1px solid #1f2937",
-    borderRadius: 14,
-    padding: 10,
+    borderRadius: 16,
+    padding: 12,
+    boxShadow: "0 8px 24px rgba(0,0,0,0.16)",
   },
+
   doubleRow: {
     display: "grid",
     gridTemplateColumns: "1fr 1fr",
     gap: 8,
   },
+
   input: {
-    padding: 10,
-    borderRadius: 10,
+    padding: 12,
+    borderRadius: 12,
     border: "1px solid #334155",
     background: "#0f172a",
     color: "white",
     outline: "none",
     fontSize: 14,
   },
+
   buttonPrimary: {
-    padding: "10px 12px",
-    borderRadius: 10,
+    padding: "12px 14px",
+    borderRadius: 12,
     border: "none",
-    background: "#2563eb",
+    background: "linear-gradient(180deg, #2563eb 0%, #1d4ed8 100%)",
     color: "white",
     cursor: "pointer",
-    fontWeight: 700,
+    fontWeight: 800,
     fontSize: 13,
+    boxShadow: "0 8px 20px rgba(37,99,235,0.35)",
   },
+
   rowButtonsCompact: {
     display: "flex",
-    gap: 6,
+    gap: 8,
     flexWrap: "wrap",
   },
+
   smallPrimaryButton: {
-    padding: "8px 10px",
-    borderRadius: 9,
+    padding: "9px 12px",
+    borderRadius: 10,
     border: "none",
-    background: "#2563eb",
+    background: "linear-gradient(180deg, #2563eb 0%, #1d4ed8 100%)",
     color: "white",
     cursor: "pointer",
     fontWeight: 700,
     fontSize: 12,
   },
+
   smallSecondaryButton: {
-    padding: "8px 10px",
-    borderRadius: 9,
+    padding: "9px 12px",
+    borderRadius: 10,
     border: "1px solid #334155",
     background: "#1e293b",
     color: "white",
@@ -1121,141 +1229,164 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     fontSize: 12,
   },
+
   smallDangerButton: {
-    padding: "8px 10px",
-    borderRadius: 9,
+    padding: "9px 12px",
+    borderRadius: 10,
     border: "none",
-    background: "#dc2626",
+    background: "linear-gradient(180deg, #dc2626 0%, #b91c1c 100%)",
     color: "white",
     cursor: "pointer",
     fontWeight: 700,
     fontSize: 12,
   },
+
   badgeActiveMini: {
     display: "inline-block",
     background: "#166534",
     color: "#dcfce7",
-    padding: "5px 8px",
+    padding: "6px 9px",
     borderRadius: 999,
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 800,
   },
+
   badgeBlockedMini: {
     display: "inline-block",
     background: "#7f1d1d",
     color: "#fee2e2",
-    padding: "5px 8px",
+    padding: "6px 9px",
     borderRadius: 999,
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 800,
   },
+
   badgeOnline: {
     display: "inline-block",
     background: "#065f46",
     color: "#d1fae5",
-    padding: "5px 8px",
+    padding: "6px 9px",
     borderRadius: 999,
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 800,
   },
+
   badgeOffline: {
     display: "inline-block",
     background: "#374151",
     color: "#e5e7eb",
-    padding: "5px 8px",
+    padding: "6px 9px",
     borderRadius: 999,
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 800,
   },
+
   badgePermanent: {
     display: "inline-block",
     background: "#1d4ed8",
     color: "#dbeafe",
-    padding: "5px 8px",
+    padding: "6px 9px",
     borderRadius: 999,
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 800,
   },
+
   badgeExpired: {
     display: "inline-block",
     background: "#b91c1c",
     color: "#fee2e2",
-    padding: "5px 8px",
+    padding: "6px 9px",
     borderRadius: 999,
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 800,
   },
+
   badgeExpiry: {
     display: "inline-block",
     background: "#7c3aed",
     color: "#ede9fe",
-    padding: "5px 8px",
+    padding: "6px 9px",
     borderRadius: 999,
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 800,
   },
+
   helperMini: {
     color: "#93c5fd",
     fontSize: 12,
   },
+
   modalBackdrop: {
     position: "fixed",
     inset: 0,
-    background: "rgba(0,0,0,0.62)",
+    background: "rgba(0,0,0,0.66)",
     display: "flex",
     alignItems: "flex-end",
     justifyContent: "center",
     padding: 0,
     zIndex: 30,
   },
+
   modalCardMobile: {
     width: "100%",
     maxHeight: "92vh",
     overflowY: "auto",
-    background: "#0f172a",
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
-    padding: 12,
+    background: "linear-gradient(180deg, #0f172a 0%, #111827 100%)",
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 14,
     border: "1px solid #1f2937",
+    boxShadow: "0 -12px 30px rgba(0,0,0,0.35)",
   },
+
   modalHeaderCompact: {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "flex-start",
     gap: 8,
-    marginBottom: 10,
+    marginBottom: 12,
   },
+
   modalTitle: {
-    fontSize: 18,
+    fontSize: 19,
     fontWeight: 800,
   },
+
   modalSubtitle: {
-    color: "#9fb0c8",
-    marginTop: 3,
+    color: "#94a3b8",
+    marginTop: 4,
     fontSize: 12,
   },
+
   modalSection: {
-    marginTop: 12,
+    marginTop: 14,
+    paddingTop: 6,
   },
+
   subSectionTitle: {
-    fontWeight: 700,
+    fontWeight: 800,
     marginBottom: 8,
     fontSize: 14,
+    color: "#ffffff",
   },
+
   listWrap: {
     display: "flex",
     flexDirection: "column",
     gap: 8,
   },
+
   muted: {
     color: "#94a3b8",
     fontSize: 13,
   },
+
   error: {
     color: "#fca5a5",
     margin: "4px 0 10px 0",
     fontSize: 13,
   },
+
   info: {
     color: "#cbd5e1",
     margin: "4px 0 10px 0",
