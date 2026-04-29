@@ -27,6 +27,8 @@ type Device = {
   app_state?: string | null;
   expires_at?: string | null;
   is_permanent?: boolean | null;
+  vpn_config?: string | null;
+  vpn_config_updated_at?: string | null;
 };
 
 type XtreamList = {
@@ -161,6 +163,7 @@ export default function Page() {
   const [manageExpiresAt, setManageExpiresAt] = useState("");
   const [manageIsPermanent, setManageIsPermanent] = useState(false);
   const [manageDeviceAlias, setManageDeviceAlias] = useState("");
+  const [manageVpnConfig, setManageVpnConfig] = useState("");
 
   const [manageEditingListId, setManageEditingListId] = useState<string | null>(null);
   const [manageEditAlias, setManageEditAlias] = useState("");
@@ -295,6 +298,27 @@ export default function Page() {
     if (error) return alert(error.message);
     loadAll();
     alert("Acceso actualizado");
+  }
+
+  async function saveDeviceVpnConfig() {
+    if (!manageDeviceId) return;
+
+    const config = manageVpnConfig.trim();
+    if (config && (!config.includes("[Interface]") || !config.includes("[Peer]"))) {
+      return alert("La configuracion WireGuard debe incluir [Interface] y [Peer]");
+    }
+
+    const { error } = await supabase
+      .from("devices")
+      .update({
+        vpn_config: config || null,
+        vpn_config_updated_at: config ? new Date().toISOString() : null,
+      })
+      .eq("id", manageDeviceId);
+
+    if (error) return alert(error.message);
+    loadAll();
+    alert(config ? "VPN guardada para este dispositivo" : "VPN eliminada de este dispositivo");
   }
 
   async function createList(e: React.FormEvent) {
@@ -509,6 +533,7 @@ export default function Page() {
     setManageExpiresAt(toInputDateTime(device.expires_at));
     setManageIsPermanent(!!device.is_permanent);
     setManageDeviceAlias(device.custom_alias || "");
+    setManageVpnConfig(device.vpn_config || "");
   }
 
   const totalActiveDevices = devices.filter((d) => d.is_active).length;
@@ -834,6 +859,32 @@ export default function Page() {
                     />
                   )}
                   <button onClick={saveDeviceAccess} style={styles.buttonPrimary}>Guardar acceso</button>
+                </div>
+              </div>
+
+              <div style={styles.modalSection}>
+                <div style={styles.subSectionTitle}>VPN Surfshark del dispositivo</div>
+                <div style={styles.formMobileStack}>
+                  <textarea
+                    value={manageVpnConfig}
+                    onChange={(e) => setManageVpnConfig(e.target.value)}
+                    placeholder="Pega aqui el .conf WireGuard unico de este Fire Stick"
+                    style={{ ...styles.input, minHeight: 160, resize: "vertical", fontFamily: "monospace" }}
+                  />
+                  <div style={styles.helperMini}>
+                    Usa una configuracion distinta por dispositivo para evitar cortes entre Fire Sticks.
+                  </div>
+                  <div style={styles.rowButtonsCompact}>
+                    <button onClick={saveDeviceVpnConfig} style={styles.smallPrimaryButton}>Guardar VPN</button>
+                    <button
+                      onClick={() => {
+                        setManageVpnConfig("");
+                      }}
+                      style={styles.smallSecondaryButton}
+                    >
+                      Vaciar
+                    </button>
+                  </div>
                 </div>
               </div>
 
