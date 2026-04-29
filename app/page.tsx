@@ -146,7 +146,7 @@ export default function Page() {
   const [selectedDeviceId, setSelectedDeviceId] = useState("");
   const [selectedListId, setSelectedListId] = useState("");
 
-  const [activeTab, setActiveTab] = useState<"devices" | "lists" | "assignments">("devices");
+  const [activeTab, setActiveTab] = useState<"devices" | "lists" | "assignments" | "vpn">("devices");
   const [showOnlyActiveDevices, setShowOnlyActiveDevices] = useState(false);
   const [showOnlyOnlineDevices, setShowOnlyOnlineDevices] = useState(false);
   const [showOnlyExpiredDevices, setShowOnlyExpiredDevices] = useState(false);
@@ -164,6 +164,8 @@ export default function Page() {
   const [manageIsPermanent, setManageIsPermanent] = useState(false);
   const [manageDeviceAlias, setManageDeviceAlias] = useState("");
   const [manageVpnConfig, setManageVpnConfig] = useState("");
+  const [vpnEditorDeviceId, setVpnEditorDeviceId] = useState<string | null>(null);
+  const [vpnEditorConfig, setVpnEditorConfig] = useState("");
 
   const [manageEditingListId, setManageEditingListId] = useState<string | null>(null);
   const [manageEditAlias, setManageEditAlias] = useState("");
@@ -273,6 +275,32 @@ export default function Page() {
     });
   }, [lists, showOnlyActiveLists, search]);
 
+  const filteredVpnDevices = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return [...devices]
+      .filter((d) => {
+        const text = [
+          getDeviceLabel(d),
+          d.device_code,
+          d.display_code,
+          d.device_name,
+          d.platform,
+          d.vpn_config ? "vpn configurada" : "vpn pendiente",
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+
+        return !q || text.includes(q);
+      })
+      .sort((a, b) => {
+        const aHasVpn = a.vpn_config?.trim() ? 1 : 0;
+        const bHasVpn = b.vpn_config?.trim() ? 1 : 0;
+        if (bHasVpn !== aHasVpn) return bHasVpn - aHasVpn;
+        return deviceSortValue(b) - deviceSortValue(a);
+      });
+  }, [devices, search]);
+
   async function toggleDevice(id: string, active: boolean) {
     const { error } = await supabase.from("devices").update({ is_active: !active }).eq("id", id);
     if (error) return alert(error.message);
@@ -302,10 +330,20 @@ export default function Page() {
 
   async function saveDeviceVpnConfig() {
     if (!manageDeviceId) return;
+    await saveVpnConfigForDevice(manageDeviceId, manageVpnConfig);
+  }
 
-    const config = manageVpnConfig.trim();
+  async function saveVpnEditorConfig() {
+    if (!vpnEditorDeviceId) return;
+    await saveVpnConfigForDevice(vpnEditorDeviceId, vpnEditorConfig);
+    setVpnEditorDeviceId(null);
+    setVpnEditorConfig("");
+  }
+
+  async function saveVpnConfigForDevice(deviceId: string, rawConfig: string) {
+    const config = rawConfig.trim();
     if (config && (!config.includes("[Interface]") || !config.includes("[Peer]"))) {
-      return alert("La configuracion WireGuard debe incluir [Interface] y [Peer]");
+      return alert("La configuración WireGuard debe incluir [Interface] y [Peer]");
     }
 
     const { error } = await supabase
@@ -314,7 +352,7 @@ export default function Page() {
         vpn_config: config || null,
         vpn_config_updated_at: config ? new Date().toISOString() : null,
       })
-      .eq("id", manageDeviceId);
+      .eq("id", deviceId);
 
     if (error) return alert(error.message);
     loadAll();
@@ -536,10 +574,16 @@ export default function Page() {
     setManageVpnConfig(device.vpn_config || "");
   }
 
+  function openVpnEditor(device: Device) {
+    setVpnEditorDeviceId(device.id);
+    setVpnEditorConfig(device.vpn_config || "");
+  }
+
   const totalActiveDevices = devices.filter((d) => d.is_active).length;
   const totalActiveLists = lists.filter((l) => l.is_active).length;
   const totalOnlineDevices = devices.filter((d) => isDeviceReallyOnline(d)).length;
   const totalExpiredDevices = devices.filter((d) => isDeviceExpired(d)).length;
+  const totalVpnConfigured = devices.filter((d) => d.vpn_config?.trim()).length;
 
   const managedDeviceAssignments = manageDeviceId ? getDeviceAssignments(manageDeviceId) : [];
   const availableListsForManagedDevice = manageDeviceId
@@ -547,36 +591,45 @@ export default function Page() {
     : lists;
 
   const managedDevice = manageDeviceId ? getDeviceById(manageDeviceId) : null;
+  const vpnEditorDevice = vpnEditorDeviceId ? getDeviceById(vpnEditorDeviceId) : null;
 
   return (
     <div style={styles.page}>
       <div style={styles.container}>
-        <div style={styles.headerCompact}>
+        <div style={styles.heroCard}>
           <div>
+            <div style={styles.kicker}>Centro de control</div>
             <h1 style={styles.title}>AchoTV Panel</h1>
-            <p style={styles.subtitle}>Control rápido desde móvil</p>
+            <p style={styles.subtitle}>Gestiona dispositivos, listas y VPN Surfshark desde un único sitio.</p>
           </div>
-          <button onClick={loadAll} style={styles.smallSecondaryButton}>Recargar</button>
+          <button onClick={loadAll} style={styles.refreshButton}>Recargar datos</button>
         </div>
 
         <div style={styles.statsCompactRow}>
-          <div style={styles.miniStat}><span style={styles.miniStatLabel}>Disp.</span><span style={styles.miniStatValue}>{devices.length}</span></div>
+          <div style={styles.miniStat}><span style={styles.miniStatLabel}>Dispositivos</span><span style={styles.miniStatValue}>{devices.length}</span></div>
           <div style={styles.miniStat}><span style={styles.miniStatLabel}>Activos</span><span style={styles.miniStatValue}>{totalActiveDevices}</span></div>
           <div style={styles.miniStat}><span style={styles.miniStatLabel}>Online</span><span style={styles.miniStatValue}>{totalOnlineDevices}</span></div>
-          <div style={styles.miniStat}><span style={styles.miniStatLabel}>Caduc.</span><span style={styles.miniStatValue}>{totalExpiredDevices}</span></div>
+          <div style={styles.miniStat}><span style={styles.miniStatLabel}>VPN</span><span style={styles.miniStatValue}>{totalVpnConfigured}</span></div>
         </div>
 
         <div style={styles.stickyToolbar}>
           <div style={styles.tabBarCompact}>
-            <button onClick={() => setActiveTab("devices")} style={activeTab === "devices" ? styles.tabButtonActive : styles.tabButton}>Disp.</button>
+            <button onClick={() => setActiveTab("devices")} style={activeTab === "devices" ? styles.tabButtonActive : styles.tabButton}>Dispositivos</button>
             <button onClick={() => setActiveTab("lists")} style={activeTab === "lists" ? styles.tabButtonActive : styles.tabButton}>Listas</button>
-            <button onClick={() => setActiveTab("assignments")} style={activeTab === "assignments" ? styles.tabButtonActive : styles.tabButton}>Asig.</button>
+            <button onClick={() => setActiveTab("assignments")} style={activeTab === "assignments" ? styles.tabButtonActive : styles.tabButton}>Asignaciones</button>
+            <button onClick={() => setActiveTab("vpn")} style={activeTab === "vpn" ? styles.tabButtonActive : styles.tabButton}>VPN</button>
           </div>
 
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder={activeTab === "devices" ? "Buscar dispositivo" : "Buscar lista"}
+            placeholder={
+              activeTab === "devices"
+                ? "Buscar dispositivo"
+                : activeTab === "vpn"
+                  ? "Buscar VPN o dispositivo"
+                  : "Buscar lista"
+            }
             style={styles.inputCompactTop}
           />
         </div>
@@ -794,6 +847,128 @@ export default function Page() {
           </div>
         )}
 
+        {activeTab === "vpn" && (
+          <div style={styles.stackList}>
+            <div style={styles.sectionIntro}>
+              <div>
+                <div style={styles.sectionTitle}>VPN por dispositivo</div>
+                <div style={styles.sectionText}>
+                  Cada Fire Stick debe tener una configuración WireGuard distinta para evitar cortes cuando usas varios a la vez.
+                </div>
+              </div>
+              <div style={styles.vpnSummaryPill}>
+                {totalVpnConfigured}/{devices.length} configurados
+              </div>
+            </div>
+
+            {filteredVpnDevices.map((device) => {
+              const hasVpn = !!device.vpn_config?.trim();
+              return (
+                <div key={device.id} style={hasVpn ? styles.vpnCardReady : styles.vpnCardPending}>
+                  <div style={styles.mobileCardTop}>
+                    <div>
+                      <div style={styles.cardTitle}>{getDeviceLabel(device)}</div>
+                      <div style={styles.cardSub}>
+                        Código: {device.display_code || device.device_code || "-"}
+                      </div>
+                    </div>
+                    <div style={styles.badgeColumn}>
+                      <span style={hasVpn ? styles.badgeOnline : styles.badgeExpired}>
+                        {hasVpn ? "VPN lista" : "Sin VPN"}
+                      </span>
+                      <span style={isDeviceReallyOnline(device) ? styles.badgeOnline : styles.badgeOffline}>
+                        {isDeviceReallyOnline(device) ? "Online" : "Offline"}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div style={styles.infoGridCompact}>
+                    <div>
+                      <span style={styles.labelMini}>Actualizada:</span>{" "}
+                      {formatDate(device.vpn_config_updated_at)}
+                    </div>
+                    <div>
+                      <span style={styles.labelMini}>Estado app:</span>{" "}
+                      {getWatchingLabel(device)}
+                    </div>
+                    <div>
+                      <span style={styles.labelMini}>Recomendación:</span>{" "}
+                      {hasVpn ? "Usar esta configuración solo en este dispositivo." : "Pega aquí una configuración única de Surfshark."}
+                    </div>
+                  </div>
+
+                  <div style={styles.rowButtonsCompact}>
+                    <button onClick={() => openVpnEditor(device)} style={styles.smallPrimaryButton}>
+                      {hasVpn ? "Editar VPN" : "Añadir VPN"}
+                    </button>
+                    <button onClick={() => openManageDevice(device)} style={styles.smallSecondaryButton}>
+                      Gestionar dispositivo
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {vpnEditorDeviceId && (
+          <div
+            style={styles.modalBackdrop}
+            onClick={() => {
+              setVpnEditorDeviceId(null);
+              setVpnEditorConfig("");
+            }}
+          >
+            <div style={styles.vpnModalCard} onClick={(e) => e.stopPropagation()}>
+              <div style={styles.modalHeaderCompact}>
+                <div>
+                  <div style={styles.modalTitle}>Editar VPN Surfshark</div>
+                  <div style={styles.modalSubtitle}>
+                    {vpnEditorDevice ? getDeviceLabel(vpnEditorDevice) : vpnEditorDeviceId}
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setVpnEditorDeviceId(null);
+                    setVpnEditorConfig("");
+                  }}
+                  style={styles.smallDangerButton}
+                >
+                  Cerrar
+                </button>
+              </div>
+
+              <div style={styles.vpnNotice}>
+                Pega una configuración WireGuard única para este Fire Stick. Si dos dispositivos usan la misma clave, uno puede cortar al otro.
+              </div>
+
+              <textarea
+                value={vpnEditorConfig}
+                onChange={(e) => setVpnEditorConfig(e.target.value)}
+                placeholder="Pega aquí el archivo .conf de Surfshark para este dispositivo"
+                style={styles.vpnTextarea}
+              />
+
+              <div style={styles.rowButtonsCompact}>
+                <button onClick={saveVpnEditorConfig} style={styles.buttonPrimary}>Guardar VPN</button>
+                <button onClick={() => setVpnEditorConfig("")} style={styles.smallSecondaryButton}>Vaciar texto</button>
+                <button
+                  onClick={async () => {
+                    if (!vpnEditorDeviceId) return;
+                    if (!window.confirm("¿Eliminar la VPN de este dispositivo?")) return;
+                    await saveVpnConfigForDevice(vpnEditorDeviceId, "");
+                    setVpnEditorDeviceId(null);
+                    setVpnEditorConfig("");
+                  }}
+                  style={styles.smallDangerButton}
+                >
+                  Eliminar VPN
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {manageDeviceId && (
           <div style={styles.modalBackdrop} onClick={() => setManageDeviceId(null)}>
             <div style={styles.modalCardMobile} onClick={(e) => e.stopPropagation()}>
@@ -1002,6 +1177,29 @@ const styles: Record<string, React.CSSProperties> = {
     margin: "0 auto",
   },
 
+  heroCard: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 16,
+    marginBottom: 14,
+    padding: 18,
+    borderRadius: 24,
+    border: "1px solid rgba(59,130,246,0.26)",
+    background:
+      "radial-gradient(circle at 18% 10%, rgba(37,99,235,0.35) 0, transparent 32%), linear-gradient(135deg, rgba(15,23,42,0.96), rgba(2,6,23,0.98))",
+    boxShadow: "0 18px 48px rgba(0,0,0,0.32)",
+  },
+
+  kicker: {
+    color: "#93c5fd",
+    fontSize: 12,
+    fontWeight: 900,
+    letterSpacing: 1.4,
+    marginBottom: 4,
+    textTransform: "uppercase",
+  },
+
   headerCompact: {
     display: "flex",
     justifyContent: "space-between",
@@ -1022,6 +1220,18 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#94a3b8",
     margin: "4px 0 0 0",
     fontSize: 14,
+  },
+
+  refreshButton: {
+    padding: "12px 15px",
+    borderRadius: 14,
+    border: "1px solid rgba(147,197,253,0.35)",
+    background: "rgba(15,23,42,0.78)",
+    color: "white",
+    cursor: "pointer",
+    fontWeight: 800,
+    fontSize: 13,
+    whiteSpace: "nowrap",
   },
 
   statsCompactRow: {
@@ -1067,7 +1277,7 @@ const styles: Record<string, React.CSSProperties> = {
 
   tabBarCompact: {
     display: "grid",
-    gridTemplateColumns: "repeat(3, 1fr)",
+    gridTemplateColumns: "repeat(4, 1fr)",
     gap: 8,
     marginBottom: 10,
   },
@@ -1113,9 +1323,65 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 10,
   },
 
+  sectionIntro: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    background: "linear-gradient(135deg, rgba(14,165,233,0.12), rgba(37,99,235,0.08))",
+    border: "1px solid rgba(59,130,246,0.22)",
+    borderRadius: 18,
+    padding: 14,
+  },
+
+  sectionTitle: {
+    fontWeight: 900,
+    fontSize: 17,
+    color: "#ffffff",
+  },
+
+  sectionText: {
+    color: "#cbd5e1",
+    fontSize: 13,
+    lineHeight: 1.4,
+    marginTop: 4,
+  },
+
+  vpnSummaryPill: {
+    padding: "9px 12px",
+    borderRadius: 999,
+    background: "#0f766e",
+    color: "#ccfbf1",
+    fontSize: 12,
+    fontWeight: 900,
+    whiteSpace: "nowrap",
+  },
+
   mobileCard: {
     background: "linear-gradient(180deg, #111827 0%, #0f172a 100%)",
     border: "1px solid #1f2937",
+    borderRadius: 18,
+    padding: 14,
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
+    boxShadow: "0 12px 30px rgba(0,0,0,0.18)",
+  },
+
+  vpnCardReady: {
+    background: "linear-gradient(180deg, rgba(6,78,59,0.72) 0%, #0f172a 100%)",
+    border: "1px solid rgba(16,185,129,0.34)",
+    borderRadius: 18,
+    padding: 14,
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
+    boxShadow: "0 12px 30px rgba(0,0,0,0.18)",
+  },
+
+  vpnCardPending: {
+    background: "linear-gradient(180deg, rgba(127,29,29,0.42) 0%, #0f172a 100%)",
+    border: "1px solid rgba(248,113,113,0.28)",
     borderRadius: 18,
     padding: 14,
     display: "flex",
@@ -1388,6 +1654,45 @@ const styles: Record<string, React.CSSProperties> = {
     padding: 14,
     border: "1px solid #1f2937",
     boxShadow: "0 -12px 30px rgba(0,0,0,0.35)",
+  },
+
+  vpnModalCard: {
+    width: "min(760px, calc(100% - 24px))",
+    maxHeight: "90vh",
+    overflowY: "auto",
+    background:
+      "radial-gradient(circle at 20% 0%, rgba(14,165,233,0.18) 0, transparent 30%), linear-gradient(180deg, #0f172a 0%, #111827 100%)",
+    borderRadius: 22,
+    padding: 16,
+    border: "1px solid rgba(59,130,246,0.28)",
+    boxShadow: "0 24px 70px rgba(0,0,0,0.48)",
+  },
+
+  vpnNotice: {
+    color: "#bfdbfe",
+    background: "rgba(37,99,235,0.12)",
+    border: "1px solid rgba(96,165,250,0.22)",
+    borderRadius: 14,
+    padding: 12,
+    fontSize: 13,
+    lineHeight: 1.45,
+    marginBottom: 12,
+  },
+
+  vpnTextarea: {
+    width: "100%",
+    minHeight: 280,
+    padding: 13,
+    borderRadius: 14,
+    border: "1px solid #334155",
+    background: "#020617",
+    color: "#e5edf9",
+    outline: "none",
+    fontSize: 13,
+    lineHeight: 1.45,
+    fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace",
+    resize: "vertical",
+    marginBottom: 12,
   },
 
   modalHeaderCompact: {
