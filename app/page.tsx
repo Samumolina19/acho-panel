@@ -29,6 +29,18 @@ type Device = {
   is_permanent?: boolean | null;
   vpn_config?: string | null;
   vpn_config_updated_at?: string | null;
+  reported_lists?: ReportedList[] | null;
+  reported_lists_count?: number | null;
+  reported_lists_updated_at?: string | null;
+};
+
+type ReportedList = {
+  id?: string | null;
+  name?: string | null;
+  alias?: string | null;
+  server?: string | null;
+  username?: string | null;
+  is_active?: boolean | null;
 };
 
 type XtreamList = {
@@ -128,6 +140,11 @@ function getDeviceLabel(device: Device) {
     device.device_code?.trim() ||
     "Sin nombre"
   );
+}
+
+function getReportedLists(device?: Device | null): ReportedList[] {
+  if (!device?.reported_lists || !Array.isArray(device.reported_lists)) return [];
+  return device.reported_lists;
 }
 
 export default function Page() {
@@ -591,6 +608,7 @@ export default function Page() {
     : lists;
 
   const managedDevice = manageDeviceId ? getDeviceById(manageDeviceId) : null;
+  const managedDeviceReportedLists = getReportedLists(managedDevice);
   const vpnEditorDevice = vpnEditorDeviceId ? getDeviceById(vpnEditorDeviceId) : null;
 
   return (
@@ -1152,6 +1170,40 @@ export default function Page() {
                         </div>
                       );
                     })
+                  )}
+                </div>
+              </div>
+
+              <div style={styles.modalSection}>
+                <div style={styles.subSectionTitle}>Listas reportadas por la app</div>
+                <div style={styles.formMobileStack}>
+                  <div style={styles.helperMini}>
+                    Se actualizan cuando el usuario añade, cambia o borra listas dentro de AchoTV.
+                  </div>
+                  <div style={styles.muted}>
+                    Última sincronización: {formatDate(managedDevice?.reported_lists_updated_at)}
+                  </div>
+                  {managedDeviceReportedLists.length === 0 ? (
+                    <div style={styles.muted}>La app todavía no ha enviado listas a este dispositivo.</div>
+                  ) : (
+                    <div style={styles.listWrap}>
+                      {managedDeviceReportedLists.map((list, index) => (
+                        <div key={`${list.id || list.server || "list"}-${index}`} style={styles.mobileCardMini}>
+                          <div>
+                            <div style={styles.cardTitleSmall}>
+                              {list.alias?.trim() || list.name?.trim() || "Sin alias"}
+                            </div>
+                            <div style={styles.cardSubSmall}>{list.server || "-"}</div>
+                            <div style={styles.cardSubSmall}>{list.username || "-"}</div>
+                          </div>
+                          <div style={styles.rowButtonsCompact}>
+                            <span style={list.is_active ? styles.badgeActiveMini : styles.badgeOffline}>
+                              {list.is_active ? "Activa en app" : "Guardada"}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
               </div>
