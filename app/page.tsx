@@ -557,6 +557,20 @@ export default function Page() {
     showToast("Configuración copiada al nuevo dispositivo", "success");
   }
 
+  async function copyDeviceCode(device: Device) {
+    const code = device.display_code?.trim() || device.device_code?.trim() || "";
+    if (!code) {
+      return notifyError("Este dispositivo no tiene código para copiar");
+    }
+
+    try {
+      await navigator.clipboard.writeText(code);
+      showToast(`Código copiado: ${code}`, "success");
+    } catch {
+      notifyError("No se pudo copiar el código");
+    }
+  }
+
   async function saveDeviceAccess() {
     if (!manageDeviceId) return;
 
@@ -1010,6 +1024,7 @@ export default function Page() {
                     <button onClick={() => toggleDevice(device.id, device.is_active)} style={styles.smallPrimaryButton}>
                       {device.is_active ? "Off" : "On"}
                     </button>
+                    <button onClick={() => copyDeviceCode(device)} style={styles.smallSecondaryButton}>Copiar código</button>
                     <button onClick={() => openManageDevice(device)} style={styles.smallSecondaryButton}>Nueva</button>
                     <button onClick={() => openManageDevice(device)} style={styles.smallSecondaryButton}>Gestionar</button>
                     <button onClick={() => deleteDevice(device.id)} style={styles.smallDangerButton}>Eliminar</button>
@@ -1271,7 +1286,14 @@ export default function Page() {
                     {managedDevice ? getDeviceLabel(managedDevice) : manageDeviceId}
                   </div>
                 </div>
-                <button onClick={() => setManageDeviceId(null)} style={styles.smallDangerButton}>Cerrar</button>
+                <div style={styles.rowButtonsCompact}>
+                  {managedDevice && (
+                    <button onClick={() => copyDeviceCode(managedDevice)} style={styles.smallSecondaryButton}>
+                      Copiar código
+                    </button>
+                  )}
+                  <button onClick={() => setManageDeviceId(null)} style={styles.smallDangerButton}>Cerrar</button>
+                </div>
               </div>
 
               <div style={styles.modalSection}>
