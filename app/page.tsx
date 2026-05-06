@@ -324,6 +324,35 @@ export default function Page() {
     loadAll();
   }
 
+  async function deleteDevice(id: string) {
+    if (!window.confirm("¿Eliminar este dispositivo? También se quitarán sus asignaciones de listas.")) {
+      return;
+    }
+
+    const { error: assignmentsError } = await supabase
+      .from("device_list_assignments")
+      .delete()
+      .eq("device_id", id);
+
+    if (assignmentsError) return alert(assignmentsError.message);
+
+    const { error: deviceError } = await supabase.from("devices").delete().eq("id", id);
+    if (deviceError) return alert(deviceError.message);
+
+    if (manageDeviceId === id) {
+      setManageDeviceId(null);
+      setManageListId("");
+      setManageExpiresAt("");
+      setManageIsPermanent(false);
+      setManageDeviceAlias("");
+      setManageVpnConfig("");
+      cancelManageEditList();
+    }
+
+    loadAll();
+    alert("Dispositivo eliminado");
+  }
+
   async function saveDeviceAccess() {
     if (!manageDeviceId) return;
 
@@ -742,6 +771,7 @@ export default function Page() {
                     </button>
                     <button onClick={() => openManageDevice(device)} style={styles.smallSecondaryButton}>Nueva</button>
                     <button onClick={() => openManageDevice(device)} style={styles.smallSecondaryButton}>Gestionar</button>
+                    <button onClick={() => deleteDevice(device.id)} style={styles.smallDangerButton}>Eliminar</button>
                   </div>
                 </div>
               );
@@ -921,6 +951,9 @@ export default function Page() {
                     </button>
                     <button onClick={() => openManageDevice(device)} style={styles.smallSecondaryButton}>
                       Gestionar dispositivo
+                    </button>
+                    <button onClick={() => deleteDevice(device.id)} style={styles.smallDangerButton}>
+                      Eliminar
                     </button>
                   </div>
                 </div>
