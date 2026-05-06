@@ -30,6 +30,8 @@ type Device = {
   is_permanent?: boolean | null;
   vpn_config?: string | null;
   vpn_config_updated_at?: string | null;
+  sync_requested_at?: string | null;
+  last_forced_sync_at?: string | null;
   reported_lists?: ReportedList[] | null;
   reported_lists_count?: number | null;
   reported_lists_updated_at?: string | null;
@@ -172,6 +174,7 @@ function buildDeviceHistory(device: Device, assignments: Assignment[], lists: Xt
     : getWatchingLabel(device));
   push("vpn", device.vpn_config_updated_at, "VPN actualizada", device.vpn_config?.trim() ? "Se guardó o renovó la configuración WireGuard." : "La configuración VPN fue eliminada.", device.vpn_config?.trim() ? "success" : "error");
   push("lists", device.reported_lists_updated_at, "Listas sincronizadas", `${getReportedLists(device).length} listas reportadas por la app.`);
+  push("force-sync", device.last_forced_sync_at, "Sincronización forzada", "El dispositivo atendió una orden manual de sincronización desde el panel.", "success");
   push("expires", device.expires_at, device.is_permanent ? "Acceso permanente" : "Acceso configurado", device.is_permanent ? "El dispositivo quedó marcado como permanente." : `Caduca el ${formatDate(device.expires_at)}`, device.is_permanent ? "success" : "info");
 
   assignments.forEach((assignment) => {
@@ -569,6 +572,19 @@ export default function Page() {
     } catch {
       notifyError("No se pudo copiar el código");
     }
+  }
+
+  async function forceDeviceSync(device: Device) {
+    const { error } = await supabase
+      .from("devices")
+      .update({
+        sync_requested_at: new Date().toISOString(),
+      })
+      .eq("id", device.id);
+
+    if (error) return notifyError(error.message);
+    loadAll();
+    showToast(`Sincronización solicitada para ${getDeviceLabel(device)}`, "success");
   }
 
   async function saveDeviceAccess() {
@@ -1024,6 +1040,7 @@ export default function Page() {
                     <button onClick={() => toggleDevice(device.id, device.is_active)} style={styles.smallPrimaryButton}>
                       {device.is_active ? "Off" : "On"}
                     </button>
+                    <button onClick={() => forceDeviceSync(device)} style={styles.smallPrimaryButton}>Sincronizar</button>
                     <button onClick={() => copyDeviceCode(device)} style={styles.smallSecondaryButton}>Copiar código</button>
                     <button onClick={() => openManageDevice(device)} style={styles.smallSecondaryButton}>Nueva</button>
                     <button onClick={() => openManageDevice(device)} style={styles.smallSecondaryButton}>Gestionar</button>
@@ -1535,6 +1552,26 @@ export default function Page() {
                         </div>
                       ))}
                     </div>
+                  )}
+                </div>
+              </div>
+
+              <div style={styles.modalSection}>
+                <div style={styles.subSectionTitle}>Sincronización manual</div>
+                <div style={styles.formMobileStack}>
+                  <div style={styles.helperMini}>
+                    Pide a la app que refresque listas y VPN sin esperar al siguiente ciclo automático.
+                  </div>
+                  <div style={styles.muted}>
+                    Última petición: {formatDate(managedDevice?.sync_requested_at)}
+                  </div>
+                  <div style={styles.muted}>
+                    Última sincronización forzada atendida: {formatDate(managedDevice?.last_forced_sync_at)}
+                  </div>
+                  {managedDevice && (
+                    <button onClick={() => forceDeviceSync(managedDevice)} style={styles.buttonPrimary}>
+                      Forzar sincronización ahora
+                    </button>
                   )}
                 </div>
               </div>
