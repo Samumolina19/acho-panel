@@ -10,6 +10,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 type Device = {
   id: string;
+  created_at?: string | null;
   device_code: string | null;
   display_code: string | null;
   device_name: string | null;
@@ -58,6 +59,14 @@ type Assignment = {
   device_id: string;
   xtream_list_id: string;
   created_at?: string | null;
+};
+
+type ToastType = "success" | "error" | "info";
+
+type ToastItem = {
+  id: number;
+  message: string;
+  type: ToastType;
 };
 
 function formatDate(value?: string | null) {
@@ -147,6 +156,40 @@ function getReportedLists(device?: Device | null): ReportedList[] {
   return device.reported_lists;
 }
 
+function buildDeviceHistory(device: Device, assignments: Assignment[], lists: XtreamList[]) {
+  const events: Array<{ id: string; at: number; title: string; detail: string; tone: ToastType }> = [];
+  const push = (key: string, value: string | null | undefined, title: string, detail: string, tone: ToastType = "info") => {
+    if (!value) return;
+    const at = new Date(value).getTime();
+    if (Number.isNaN(at)) return;
+    events.push({ id: key, at, title, detail, tone });
+  };
+
+  push("created", device.created_at, "Dispositivo registrado", device.display_code || device.device_code || device.device_name || "Nuevo dispositivo", "success");
+  push("heartbeat", device.heartbeat_at || device.last_seen, "Última conexión", isDeviceReallyOnline(device) ? "El dispositivo sigue reportando al panel." : "Último contacto reportado por la app.");
+  push("playback", device.current_updated_at, "Última reproducción", device.current_channel?.trim()
+    ? `${device.current_channel}${device.current_content_type?.trim() ? ` (${device.current_content_type})` : ""}`
+    : getWatchingLabel(device));
+  push("vpn", device.vpn_config_updated_at, "VPN actualizada", device.vpn_config?.trim() ? "Se guardó o renovó la configuración WireGuard." : "La configuración VPN fue eliminada.", device.vpn_config?.trim() ? "success" : "error");
+  push("lists", device.reported_lists_updated_at, "Listas sincronizadas", `${getReportedLists(device).length} listas reportadas por la app.`);
+  push("expires", device.expires_at, device.is_permanent ? "Acceso permanente" : "Acceso configurado", device.is_permanent ? "El dispositivo quedó marcado como permanente." : `Caduca el ${formatDate(device.expires_at)}`, device.is_permanent ? "success" : "info");
+
+  assignments.forEach((assignment) => {
+    const list = lists.find((item) => item.id === assignment.xtream_list_id);
+    push(
+      `assignment-${assignment.id}`,
+      assignment.created_at,
+      "Lista asignada",
+      list ? `${list.alias} (${list.server})` : "Lista vinculada al dispositivo",
+      "success"
+    );
+  });
+
+  return events
+    .sort((a, b) => b.at - a.at)
+    .slice(0, 8);
+}
+
 export default function Page() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [lists, setLists] = useState<XtreamList[]>([]);
@@ -195,8 +238,25 @@ export default function Page() {
   const [remoteServer, setRemoteServer] = useState("");
   const [remoteUsername, setRemoteUsername] = useState("");
   const [remotePassword, setRemotePassword] = useState("");
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
 
   const [, setNowTick] = useState(0);
+
+  function showToast(message: string, type: ToastType = "info") {
+    const id = Date.now() + Math.floor(Math.random() * 1000);
+    setToasts((current) => [...current, { id, message, type }]);
+    window.setTimeout(() => {
+      setToasts((current) => current.filter((toast) => toast.id !== id));
+    }, 3200);
+  }
+
+  function dismissToast(id: number) {
+    setToasts((current) => current.filter((toast) => toast.id !== id));
+  }
+
+  function notifyError(message: string) {
+    showToast(message, "error");
+  }
 
   async function loadAll() {
     setLoading(true);
@@ -321,8 +381,9 @@ export default function Page() {
 
   async function toggleDevice(id: string, active: boolean) {
     const { error } = await supabase.from("devices").update({ is_active: !active }).eq("id", id);
-    if (error) return alert(error.message);
+    if (error) return notifyError(error.message);
     loadAll();
+    showToast(active ? "Dispositivo desactivado" : "Dispositivo activado", "success");
   }
 
   async function deleteDevice(id: string) {
@@ -335,10 +396,10 @@ export default function Page() {
       .delete()
       .eq("device_id", id);
 
-    if (assignmentsError) return alert(assignmentsError.message);
+    if (assignmentsError) return notifyError(assignmentsError.message);
 
     const { error: deviceError } = await supabase.from("devices").delete().eq("id", id);
-    if (deviceError) return alert(deviceError.message);
+    if (deviceError) return notifyError(deviceError.message);
 
     if (manageDeviceId === id) {
       setManageDeviceId(null);
@@ -351,23 +412,23 @@ export default function Page() {
     }
 
     loadAll();
-    alert("Dispositivo eliminado");
+    showToast("Dispositivo eliminado", "success");
   }
 
   async function replaceDevice(sourceDeviceId: string, targetDeviceId: string) {
     if (!sourceDeviceId || !targetDeviceId) {
-      return alert("Selecciona el dispositivo nuevo");
+      return notifyError("Selecciona el dispositivo nuevo");
     }
 
     if (sourceDeviceId === targetDeviceId) {
-      return alert("El dispositivo nuevo debe ser distinto al actual");
+      return notifyError("El dispositivo nuevo debe ser distinto al actual");
     }
 
     const sourceDevice = getDeviceById(sourceDeviceId);
     const targetDevice = getDeviceById(targetDeviceId);
 
     if (!sourceDevice || !targetDevice) {
-      return alert("No se ha encontrado uno de los dispositivos");
+      return notifyError("No se ha encontrado uno de los dispositivos");
     }
 
     const confirmed = window.confirm(
@@ -391,14 +452,14 @@ export default function Page() {
       })
       .eq("id", targetDeviceId);
 
-    if (updateTargetError) return alert(updateTargetError.message);
+    if (updateTargetError) return notifyError(updateTargetError.message);
 
     const { error: deleteTargetAssignmentsError } = await supabase
       .from("device_list_assignments")
       .delete()
       .eq("device_id", targetDeviceId);
 
-    if (deleteTargetAssignmentsError) return alert(deleteTargetAssignmentsError.message);
+    if (deleteTargetAssignmentsError) return notifyError(deleteTargetAssignmentsError.message);
 
     if (sourceAssignments.length > 0) {
       const mappedAssignments = sourceAssignments.map((assignment) => ({
@@ -410,7 +471,7 @@ export default function Page() {
         .from("device_list_assignments")
         .insert(mappedAssignments);
 
-      if (insertAssignmentsError) return alert(insertAssignmentsError.message);
+      if (insertAssignmentsError) return notifyError(insertAssignmentsError.message);
     }
 
     const { error: deleteSourceAssignmentsError } = await supabase
@@ -418,35 +479,35 @@ export default function Page() {
       .delete()
       .eq("device_id", sourceDeviceId);
 
-    if (deleteSourceAssignmentsError) return alert(deleteSourceAssignmentsError.message);
+    if (deleteSourceAssignmentsError) return notifyError(deleteSourceAssignmentsError.message);
 
     const { error: deleteSourceDeviceError } = await supabase
       .from("devices")
       .delete()
       .eq("id", sourceDeviceId);
 
-    if (deleteSourceDeviceError) return alert(deleteSourceDeviceError.message);
+    if (deleteSourceDeviceError) return notifyError(deleteSourceDeviceError.message);
 
     setReplaceTargetDeviceId("");
     setManageDeviceId(null);
     loadAll();
-    alert("Dispositivo reemplazado correctamente");
+    showToast("Dispositivo reemplazado correctamente", "success");
   }
 
   async function copyDeviceConfig(sourceDeviceId: string, targetDeviceId: string) {
     if (!sourceDeviceId || !targetDeviceId) {
-      return alert("Selecciona el dispositivo destino");
+      return notifyError("Selecciona el dispositivo destino");
     }
 
     if (sourceDeviceId === targetDeviceId) {
-      return alert("El dispositivo destino debe ser distinto al actual");
+      return notifyError("El dispositivo destino debe ser distinto al actual");
     }
 
     const sourceDevice = getDeviceById(sourceDeviceId);
     const targetDevice = getDeviceById(targetDeviceId);
 
     if (!sourceDevice || !targetDevice) {
-      return alert("No se ha encontrado uno de los dispositivos");
+      return notifyError("No se ha encontrado uno de los dispositivos");
     }
 
     const confirmed = window.confirm(
@@ -469,14 +530,14 @@ export default function Page() {
       })
       .eq("id", targetDeviceId);
 
-    if (updateTargetError) return alert(updateTargetError.message);
+    if (updateTargetError) return notifyError(updateTargetError.message);
 
     const { error: deleteTargetAssignmentsError } = await supabase
       .from("device_list_assignments")
       .delete()
       .eq("device_id", targetDeviceId);
 
-    if (deleteTargetAssignmentsError) return alert(deleteTargetAssignmentsError.message);
+    if (deleteTargetAssignmentsError) return notifyError(deleteTargetAssignmentsError.message);
 
     if (sourceAssignments.length > 0) {
       const mappedAssignments = sourceAssignments.map((assignment) => ({
@@ -488,12 +549,12 @@ export default function Page() {
         .from("device_list_assignments")
         .insert(mappedAssignments);
 
-      if (insertAssignmentsError) return alert(insertAssignmentsError.message);
+      if (insertAssignmentsError) return notifyError(insertAssignmentsError.message);
     }
 
     setReplaceTargetDeviceId("");
     loadAll();
-    alert("Configuración copiada al nuevo dispositivo");
+    showToast("Configuración copiada al nuevo dispositivo", "success");
   }
 
   async function saveDeviceAccess() {
@@ -512,9 +573,9 @@ export default function Page() {
     };
 
     const { error } = await supabase.from("devices").update(payload).eq("id", manageDeviceId);
-    if (error) return alert(error.message);
+    if (error) return notifyError(error.message);
     loadAll();
-    alert("Acceso actualizado");
+    showToast("Acceso actualizado", "success");
   }
 
   async function saveDeviceVpnConfig() {
@@ -532,7 +593,7 @@ export default function Page() {
   async function saveVpnConfigForDevice(deviceId: string, rawConfig: string) {
     const config = rawConfig.trim();
     if (config && (!config.includes("[Interface]") || !config.includes("[Peer]"))) {
-      return alert("La configuración WireGuard debe incluir [Interface] y [Peer]");
+      return notifyError("La configuración WireGuard debe incluir [Interface] y [Peer]");
     }
 
     const { error } = await supabase
@@ -543,14 +604,14 @@ export default function Page() {
       })
       .eq("id", deviceId);
 
-    if (error) return alert(error.message);
+    if (error) return notifyError(error.message);
     loadAll();
-    alert(config ? "VPN guardada para este dispositivo" : "VPN eliminada de este dispositivo");
+    showToast(config ? "VPN guardada para este dispositivo" : "VPN eliminada de este dispositivo", "success");
   }
 
   async function createList(e: React.FormEvent) {
     e.preventDefault();
-    if (!alias || !server || !username || !password) return alert("Completa todos los campos de la lista");
+    if (!alias || !server || !username || !password) return notifyError("Completa todos los campos de la lista");
 
     const { error } = await supabase.from("xtream_lists").insert({
       alias,
@@ -560,26 +621,29 @@ export default function Page() {
       is_active: true,
     });
 
-    if (error) return alert(error.message);
+    if (error) return notifyError(error.message);
 
     setAlias("");
     setServer("");
     setUsername("");
     setPassword("");
     loadAll();
+    showToast("Lista guardada", "success");
   }
 
   async function toggleList(id: string, active: boolean) {
     const { error } = await supabase.from("xtream_lists").update({ is_active: !active }).eq("id", id);
-    if (error) return alert(error.message);
+    if (error) return notifyError(error.message);
     loadAll();
+    showToast(active ? "Lista desactivada" : "Lista activada", "success");
   }
 
   async function deleteList(id: string) {
     if (!window.confirm("¿Eliminar esta lista?")) return;
     const { error } = await supabase.from("xtream_lists").delete().eq("id", id);
-    if (error) return alert(error.message);
+    if (error) return notifyError(error.message);
     loadAll();
+    showToast("Lista eliminada", "success");
   }
 
   function startEditList(list: XtreamList) {
@@ -600,7 +664,7 @@ export default function Page() {
 
   async function saveEditedList(id: string) {
     if (!editAlias || !editServer || !editUsername || !editPassword) {
-      return alert("Completa todos los campos para editar la lista");
+      return notifyError("Completa todos los campos para editar la lista");
     }
 
     const { error } = await supabase
@@ -613,55 +677,59 @@ export default function Page() {
       })
       .eq("id", id);
 
-    if (error) return alert(error.message);
+    if (error) return notifyError(error.message);
     cancelEditList();
     loadAll();
+    showToast("Lista actualizada", "success");
   }
 
   async function assignList(e: React.FormEvent) {
     e.preventDefault();
-    if (!selectedDeviceId || !selectedListId) return alert("Selecciona dispositivo y lista");
+    if (!selectedDeviceId || !selectedListId) return notifyError("Selecciona dispositivo y lista");
 
     const exists = assignments.some((a) => a.device_id === selectedDeviceId && a.xtream_list_id === selectedListId);
-    if (exists) return alert("Esa lista ya está asignada a ese dispositivo");
+    if (exists) return notifyError("Esa lista ya está asignada a ese dispositivo");
 
     const { error } = await supabase.from("device_list_assignments").insert({
       device_id: selectedDeviceId,
       xtream_list_id: selectedListId,
     });
 
-    if (error) return alert(error.message);
+    if (error) return notifyError(error.message);
     setSelectedDeviceId("");
     setSelectedListId("");
     loadAll();
+    showToast("Lista asignada al dispositivo", "success");
   }
 
   async function assignExistingListToDevice(deviceId: string, listId: string) {
     if (!deviceId || !listId) return;
 
     const exists = assignments.some((a) => a.device_id === deviceId && a.xtream_list_id === listId);
-    if (exists) return alert("Esa lista ya está asignada a ese dispositivo");
+    if (exists) return notifyError("Esa lista ya está asignada a ese dispositivo");
 
     const { error } = await supabase.from("device_list_assignments").insert({
       device_id: deviceId,
       xtream_list_id: listId,
     });
 
-    if (error) return alert(error.message);
+    if (error) return notifyError(error.message);
     setManageListId("");
     loadAll();
+    showToast("Lista añadida al dispositivo", "success");
   }
 
   async function deleteAssignment(id: string) {
     if (!window.confirm("¿Quitar esta lista del dispositivo?")) return;
     const { error } = await supabase.from("device_list_assignments").delete().eq("id", id);
-    if (error) return alert(error.message);
+    if (error) return notifyError(error.message);
     loadAll();
+    showToast("Lista quitada del dispositivo", "success");
   }
 
   async function addRemoteListToDevice(deviceId: string) {
     if (!remoteAlias || !remoteServer || !remoteUsername || !remotePassword) {
-      return alert("Completa todos los campos de la nueva lista remota");
+      return notifyError("Completa todos los campos de la nueva lista remota");
     }
 
     const listRes = await supabase
@@ -677,7 +745,7 @@ export default function Page() {
       .single();
 
     if (listRes.error || !listRes.data) {
-      return alert(listRes.error?.message || "Error creando la lista");
+      return notifyError(listRes.error?.message || "Error creando la lista");
     }
 
     const assignRes = await supabase.from("device_list_assignments").insert({
@@ -685,13 +753,14 @@ export default function Page() {
       xtream_list_id: listRes.data.id,
     });
 
-    if (assignRes.error) return alert(assignRes.error.message);
+    if (assignRes.error) return notifyError(assignRes.error.message);
 
     setRemoteAlias("");
     setRemoteServer("");
     setRemoteUsername("");
     setRemotePassword("");
     loadAll();
+    showToast("Lista creada y asignada", "success");
   }
 
   function getDeviceAssignments(deviceId: string) {
@@ -731,7 +800,7 @@ export default function Page() {
 
   async function saveManageEditedList(id: string) {
     if (!manageEditAlias || !manageEditServer || !manageEditUsername || !manageEditPassword) {
-      return alert("Completa todos los campos para editar la lista");
+      return notifyError("Completa todos los campos para editar la lista");
     }
 
     const { error } = await supabase
@@ -744,9 +813,10 @@ export default function Page() {
       })
       .eq("id", id);
 
-    if (error) return alert(error.message);
+    if (error) return notifyError(error.message);
     cancelManageEditList();
     loadAll();
+    showToast("Lista actualizada", "success");
   }
 
   function openManageDevice(device: Device) {
@@ -783,6 +853,7 @@ export default function Page() {
   const managedDevice = manageDeviceId ? getDeviceById(manageDeviceId) : null;
   const managedDeviceReportedLists = getReportedLists(managedDevice);
   const vpnEditorDevice = vpnEditorDeviceId ? getDeviceById(vpnEditorDeviceId) : null;
+  const managedDeviceHistory = managedDevice ? buildDeviceHistory(managedDevice, managedDeviceAssignments, lists) : [];
   const replacementCandidates = manageDeviceId
     ? devices
         .filter((device) => device.id !== manageDeviceId)
@@ -791,6 +862,27 @@ export default function Page() {
 
   return (
     <div style={styles.page}>
+      {toasts.length > 0 && (
+        <div style={styles.toastStack}>
+          {toasts.map((toast) => (
+            <button
+              key={toast.id}
+              onClick={() => dismissToast(toast.id)}
+              style={{
+                ...styles.toast,
+                ...(toast.type === "success"
+                  ? styles.toastSuccess
+                  : toast.type === "error"
+                    ? styles.toastError
+                    : styles.toastInfo),
+              }}
+            >
+              <span style={styles.toastDot} />
+              <span style={styles.toastMessage}>{toast.message}</span>
+            </button>
+          ))}
+        </div>
+      )}
       <div style={styles.container}>
         <div style={styles.heroCard}>
           <div>
@@ -1238,10 +1330,10 @@ export default function Page() {
           })
           .eq("id", manageDeviceId);
 
-        if (error) return alert(error.message);
+        if (error) return notifyError(error.message);
 
         loadAll();
-        alert("Alias guardado");
+        showToast("Alias guardado", "success");
       }}
       style={styles.buttonPrimary}
     >
@@ -1388,6 +1480,39 @@ export default function Page() {
                         </div>
                       );
                     })
+                  )}
+                </div>
+              </div>
+
+              <div style={styles.modalSection}>
+                <div style={styles.subSectionTitle}>Historial del dispositivo</div>
+                <div style={styles.formMobileStack}>
+                  {managedDeviceHistory.length === 0 ? (
+                    <div style={styles.muted}>Aún no hay actividad suficiente para mostrar un historial.</div>
+                  ) : (
+                    <div style={styles.historyTimeline}>
+                      {managedDeviceHistory.map((event) => (
+                        <div key={event.id} style={styles.historyItem}>
+                          <div
+                            style={{
+                              ...styles.historyBadge,
+                              ...(event.tone === "success"
+                                ? styles.historyBadgeSuccess
+                                : event.tone === "error"
+                                  ? styles.historyBadgeError
+                                  : styles.historyBadgeInfo),
+                            }}
+                          />
+                          <div style={styles.historyBody}>
+                            <div style={styles.historyTopRow}>
+                              <div style={styles.historyTitle}>{event.title}</div>
+                              <div style={styles.historyTime}>{formatDate(new Date(event.at).toISOString())}</div>
+                            </div>
+                            <div style={styles.historyDetail}>{event.detail}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
               </div>
@@ -1898,6 +2023,61 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 800,
   },
 
+  toastStack: {
+    position: "fixed",
+    top: 16,
+    right: 16,
+    zIndex: 60,
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
+    width: "min(360px, calc(100% - 24px))",
+  },
+
+  toast: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    width: "100%",
+    padding: "13px 14px",
+    borderRadius: 16,
+    border: "1px solid transparent",
+    color: "#ffffff",
+    cursor: "pointer",
+    textAlign: "left",
+    boxShadow: "0 18px 40px rgba(0,0,0,0.32)",
+  },
+
+  toastSuccess: {
+    background: "linear-gradient(180deg, rgba(6,95,70,0.96), rgba(6,78,59,0.96))",
+    border: "1px solid rgba(52,211,153,0.28)",
+  },
+
+  toastError: {
+    background: "linear-gradient(180deg, rgba(153,27,27,0.96), rgba(127,29,29,0.96))",
+    border: "1px solid rgba(252,165,165,0.28)",
+  },
+
+  toastInfo: {
+    background: "linear-gradient(180deg, rgba(30,41,59,0.96), rgba(15,23,42,0.96))",
+    border: "1px solid rgba(96,165,250,0.22)",
+  },
+
+  toastDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 999,
+    background: "#ffffff",
+    opacity: 0.92,
+    flexShrink: 0,
+  },
+
+  toastMessage: {
+    fontSize: 13,
+    fontWeight: 700,
+    lineHeight: 1.4,
+  },
+
   helperMini: {
     color: "#93c5fd",
     fontSize: 12,
@@ -2000,6 +2180,79 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "column",
     gap: 8,
+  },
+
+  historyTimeline: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
+  },
+
+  historyItem: {
+    display: "flex",
+    alignItems: "flex-start",
+    gap: 10,
+    padding: 12,
+    borderRadius: 14,
+    border: "1px solid rgba(255,255,255,0.05)",
+    background: "rgba(255,255,255,0.02)",
+  },
+
+  historyBadge: {
+    width: 11,
+    height: 11,
+    borderRadius: 999,
+    marginTop: 5,
+    flexShrink: 0,
+  },
+
+  historyBadgeSuccess: {
+    background: "#34d399",
+    boxShadow: "0 0 0 4px rgba(52,211,153,0.14)",
+  },
+
+  historyBadgeError: {
+    background: "#f87171",
+    boxShadow: "0 0 0 4px rgba(248,113,113,0.14)",
+  },
+
+  historyBadgeInfo: {
+    background: "#60a5fa",
+    boxShadow: "0 0 0 4px rgba(96,165,250,0.14)",
+  },
+
+  historyBody: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 4,
+    minWidth: 0,
+    flex: 1,
+  },
+
+  historyTopRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "baseline",
+    gap: 12,
+    flexWrap: "wrap",
+  },
+
+  historyTitle: {
+    fontSize: 13,
+    fontWeight: 800,
+    color: "#ffffff",
+  },
+
+  historyTime: {
+    fontSize: 11,
+    color: "#93c5fd",
+    fontWeight: 700,
+  },
+
+  historyDetail: {
+    fontSize: 12,
+    lineHeight: 1.45,
+    color: "#cbd5e1",
   },
 
   muted: {
