@@ -433,6 +433,69 @@ export default function Page() {
     alert("Dispositivo reemplazado correctamente");
   }
 
+  async function copyDeviceConfig(sourceDeviceId: string, targetDeviceId: string) {
+    if (!sourceDeviceId || !targetDeviceId) {
+      return alert("Selecciona el dispositivo destino");
+    }
+
+    if (sourceDeviceId === targetDeviceId) {
+      return alert("El dispositivo destino debe ser distinto al actual");
+    }
+
+    const sourceDevice = getDeviceById(sourceDeviceId);
+    const targetDevice = getDeviceById(targetDeviceId);
+
+    if (!sourceDevice || !targetDevice) {
+      return alert("No se ha encontrado uno de los dispositivos");
+    }
+
+    const confirmed = window.confirm(
+      `¿Copiar la configuración de ${getDeviceLabel(sourceDevice)} a ${getDeviceLabel(targetDevice)}?\n\n` +
+        "Se copiarán listas, acceso y VPN, pero el dispositivo actual seguirá existiendo."
+    );
+
+    if (!confirmed) return;
+
+    const sourceAssignments = getDeviceAssignments(sourceDeviceId);
+
+    const { error: updateTargetError } = await supabase
+      .from("devices")
+      .update({
+        expires_at: sourceDevice.expires_at || null,
+        is_permanent: !!sourceDevice.is_permanent,
+        is_active: sourceDevice.is_active,
+        vpn_config: sourceDevice.vpn_config || null,
+        vpn_config_updated_at: sourceDevice.vpn_config ? sourceDevice.vpn_config_updated_at || new Date().toISOString() : null,
+      })
+      .eq("id", targetDeviceId);
+
+    if (updateTargetError) return alert(updateTargetError.message);
+
+    const { error: deleteTargetAssignmentsError } = await supabase
+      .from("device_list_assignments")
+      .delete()
+      .eq("device_id", targetDeviceId);
+
+    if (deleteTargetAssignmentsError) return alert(deleteTargetAssignmentsError.message);
+
+    if (sourceAssignments.length > 0) {
+      const mappedAssignments = sourceAssignments.map((assignment) => ({
+        device_id: targetDeviceId,
+        xtream_list_id: assignment.xtream_list_id,
+      }));
+
+      const { error: insertAssignmentsError } = await supabase
+        .from("device_list_assignments")
+        .insert(mappedAssignments);
+
+      if (insertAssignmentsError) return alert(insertAssignmentsError.message);
+    }
+
+    setReplaceTargetDeviceId("");
+    loadAll();
+    alert("Configuración copiada al nuevo dispositivo");
+  }
+
   async function saveDeviceAccess() {
     if (!manageDeviceId) return;
 
@@ -1145,6 +1208,12 @@ export default function Page() {
                     style={styles.buttonPrimary}
                   >
                     Reemplazar por este dispositivo
+                  </button>
+                  <button
+                    onClick={() => copyDeviceConfig(manageDeviceId, replaceTargetDeviceId)}
+                    style={styles.smallSecondaryButton}
+                  >
+                    Copiar configuración sin borrar el actual
                   </button>
                 </div>
               </div>
