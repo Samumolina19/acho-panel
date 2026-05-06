@@ -181,6 +181,7 @@ export default function Page() {
   const [manageIsPermanent, setManageIsPermanent] = useState(false);
   const [manageDeviceAlias, setManageDeviceAlias] = useState("");
   const [manageVpnConfig, setManageVpnConfig] = useState("");
+  const [replaceTargetDeviceId, setReplaceTargetDeviceId] = useState("");
   const [vpnEditorDeviceId, setVpnEditorDeviceId] = useState<string | null>(null);
   const [vpnEditorConfig, setVpnEditorConfig] = useState("");
 
@@ -351,6 +352,85 @@ export default function Page() {
 
     loadAll();
     alert("Dispositivo eliminado");
+  }
+
+  async function replaceDevice(sourceDeviceId: string, targetDeviceId: string) {
+    if (!sourceDeviceId || !targetDeviceId) {
+      return alert("Selecciona el dispositivo nuevo");
+    }
+
+    if (sourceDeviceId === targetDeviceId) {
+      return alert("El dispositivo nuevo debe ser distinto al actual");
+    }
+
+    const sourceDevice = getDeviceById(sourceDeviceId);
+    const targetDevice = getDeviceById(targetDeviceId);
+
+    if (!sourceDevice || !targetDevice) {
+      return alert("No se ha encontrado uno de los dispositivos");
+    }
+
+    const confirmed = window.confirm(
+      `¿Reemplazar ${getDeviceLabel(sourceDevice)} por ${getDeviceLabel(targetDevice)}?\n\n` +
+        "Se moverán listas, acceso y VPN al nuevo dispositivo, y el dispositivo viejo se eliminará."
+    );
+
+    if (!confirmed) return;
+
+    const sourceAssignments = getDeviceAssignments(sourceDeviceId);
+
+    const { error: updateTargetError } = await supabase
+      .from("devices")
+      .update({
+        custom_alias: sourceDevice.custom_alias || null,
+        expires_at: sourceDevice.expires_at || null,
+        is_permanent: !!sourceDevice.is_permanent,
+        is_active: sourceDevice.is_active,
+        vpn_config: sourceDevice.vpn_config || null,
+        vpn_config_updated_at: sourceDevice.vpn_config ? sourceDevice.vpn_config_updated_at || new Date().toISOString() : null,
+      })
+      .eq("id", targetDeviceId);
+
+    if (updateTargetError) return alert(updateTargetError.message);
+
+    const { error: deleteTargetAssignmentsError } = await supabase
+      .from("device_list_assignments")
+      .delete()
+      .eq("device_id", targetDeviceId);
+
+    if (deleteTargetAssignmentsError) return alert(deleteTargetAssignmentsError.message);
+
+    if (sourceAssignments.length > 0) {
+      const mappedAssignments = sourceAssignments.map((assignment) => ({
+        device_id: targetDeviceId,
+        xtream_list_id: assignment.xtream_list_id,
+      }));
+
+      const { error: insertAssignmentsError } = await supabase
+        .from("device_list_assignments")
+        .insert(mappedAssignments);
+
+      if (insertAssignmentsError) return alert(insertAssignmentsError.message);
+    }
+
+    const { error: deleteSourceAssignmentsError } = await supabase
+      .from("device_list_assignments")
+      .delete()
+      .eq("device_id", sourceDeviceId);
+
+    if (deleteSourceAssignmentsError) return alert(deleteSourceAssignmentsError.message);
+
+    const { error: deleteSourceDeviceError } = await supabase
+      .from("devices")
+      .delete()
+      .eq("id", sourceDeviceId);
+
+    if (deleteSourceDeviceError) return alert(deleteSourceDeviceError.message);
+
+    setReplaceTargetDeviceId("");
+    setManageDeviceId(null);
+    loadAll();
+    alert("Dispositivo reemplazado correctamente");
   }
 
   async function saveDeviceAccess() {
@@ -608,6 +688,7 @@ export default function Page() {
 
   function openManageDevice(device: Device) {
     setManageDeviceId(device.id);
+    setReplaceTargetDeviceId("");
     setManageListId("");
     cancelManageEditList();
     setRemoteAlias("");
@@ -639,6 +720,11 @@ export default function Page() {
   const managedDevice = manageDeviceId ? getDeviceById(manageDeviceId) : null;
   const managedDeviceReportedLists = getReportedLists(managedDevice);
   const vpnEditorDevice = vpnEditorDeviceId ? getDeviceById(vpnEditorDeviceId) : null;
+  const replacementCandidates = manageDeviceId
+    ? devices
+        .filter((device) => device.id !== manageDeviceId)
+        .sort((a, b) => deviceSortValue(b) - deviceSortValue(a))
+    : [];
 
   return (
     <div style={styles.page}>
@@ -1034,9 +1120,39 @@ export default function Page() {
               </div>
 
               <div style={styles.modalSection}>
-  <div style={styles.subSectionTitle}>Alias del dispositivo</div>
-  <div style={styles.formMobileStack}>
-    <input
+                <div style={styles.subSectionTitle}>Reemplazar dispositivo</div>
+                <div style={styles.formMobileStack}>
+                  <div style={styles.helperMini}>
+                    Si este Fire se ha roto o ha cambiado de código, puedes mover toda su configuración a otro dispositivo detectado.
+                  </div>
+                  <select
+                    value={replaceTargetDeviceId}
+                    onChange={(e) => setReplaceTargetDeviceId(e.target.value)}
+                    style={styles.input}
+                  >
+                    <option value="">Selecciona el dispositivo nuevo</option>
+                    {replacementCandidates.map((device) => (
+                      <option key={device.id} value={device.id}>
+                        {getDeviceLabel(device)} · {device.display_code || device.device_code || "Sin código"}
+                      </option>
+                    ))}
+                  </select>
+                  <div style={styles.helperMini}>
+                    Se copiarán acceso, listas y VPN. El dispositivo actual se eliminará del panel al terminar.
+                  </div>
+                  <button
+                    onClick={() => replaceDevice(manageDeviceId, replaceTargetDeviceId)}
+                    style={styles.buttonPrimary}
+                  >
+                    Reemplazar por este dispositivo
+                  </button>
+                </div>
+              </div>
+
+              <div style={styles.modalSection}>
+                <div style={styles.subSectionTitle}>Alias del dispositivo</div>
+                <div style={styles.formMobileStack}>
+                  <input
       value={manageDeviceAlias}
       onChange={(e) => setManageDeviceAlias(e.target.value)}
       placeholder="Alias del dispositivo"
