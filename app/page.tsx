@@ -63,6 +63,15 @@ type Assignment = {
   created_at?: string | null;
 };
 
+type AppConfig = {
+  id: string;
+  latest_version_code?: number | null;
+  latest_version_name?: string | null;
+  apk_url?: string | null;
+  release_notes?: string | null;
+  updated_at?: string | null;
+};
+
 type ToastType = "success" | "error" | "info";
 
 type ToastItem = {
@@ -241,6 +250,11 @@ export default function Page() {
   const [remoteServer, setRemoteServer] = useState("");
   const [remoteUsername, setRemoteUsername] = useState("");
   const [remotePassword, setRemotePassword] = useState("");
+  const [appConfigVersionCode, setAppConfigVersionCode] = useState("");
+  const [appConfigVersionName, setAppConfigVersionName] = useState("");
+  const [appConfigApkUrl, setAppConfigApkUrl] = useState("");
+  const [appConfigReleaseNotes, setAppConfigReleaseNotes] = useState("");
+  const [appConfigUpdatedAt, setAppConfigUpdatedAt] = useState("");
   const [toasts, setToasts] = useState<ToastItem[]>([]);
 
   const [, setNowTick] = useState(0);
@@ -265,19 +279,27 @@ export default function Page() {
     setLoading(true);
     setError("");
 
-    const [devicesRes, listsRes, assignmentsRes] = await Promise.all([
+    const [devicesRes, listsRes, assignmentsRes, appConfigRes] = await Promise.all([
       supabase.from("devices").select("*").order("created_at", { ascending: false }),
       supabase.from("xtream_lists").select("*").order("created_at", { ascending: false }),
       supabase.from("device_list_assignments").select("*").order("created_at", { ascending: false }),
+      supabase.from("app_config").select("*").eq("id", "main").limit(1).maybeSingle(),
     ]);
 
     if (devicesRes.error) setError(devicesRes.error.message);
     if (listsRes.error) setError(listsRes.error.message);
     if (assignmentsRes.error) setError(assignmentsRes.error.message);
+    if (appConfigRes.error) setError(appConfigRes.error.message);
 
     setDevices((devicesRes.data as Device[]) || []);
     setLists((listsRes.data as XtreamList[]) || []);
     setAssignments((assignmentsRes.data as Assignment[]) || []);
+    const appConfig = appConfigRes.data as AppConfig | null;
+    setAppConfigVersionCode(appConfig?.latest_version_code?.toString() || "");
+    setAppConfigVersionName(appConfig?.latest_version_name || "");
+    setAppConfigApkUrl(appConfig?.apk_url || "");
+    setAppConfigReleaseNotes(appConfig?.release_notes || "");
+    setAppConfigUpdatedAt(appConfig?.updated_at || "");
     setLoading(false);
   }
 
@@ -585,6 +607,32 @@ export default function Page() {
     if (error) return notifyError(error.message);
     loadAll();
     showToast(`Sincronización solicitada para ${getDeviceLabel(device)}`, "success");
+  }
+
+  async function saveAppUpdateConfig() {
+    const versionCode = Number(appConfigVersionCode.trim());
+    if (!Number.isFinite(versionCode) || versionCode <= 0) {
+      return notifyError("Pon un versionCode válido para la actualización");
+    }
+
+    if (!appConfigApkUrl.trim()) {
+      return notifyError("Pega la URL pública de la APK");
+    }
+
+    const payload = {
+      id: "main",
+      latest_version_code: versionCode,
+      latest_version_name: appConfigVersionName.trim() || `v${versionCode}`,
+      apk_url: appConfigApkUrl.trim(),
+      release_notes: appConfigReleaseNotes.trim() || null,
+      updated_at: new Date().toISOString(),
+    };
+
+    const { error } = await supabase.from("app_config").upsert(payload);
+    if (error) return notifyError(error.message);
+
+    setAppConfigUpdatedAt(payload.updated_at);
+    showToast("Configuración de actualización guardada", "success");
   }
 
   async function saveDeviceAccess() {
@@ -921,6 +969,55 @@ export default function Page() {
             <p style={styles.subtitle}>Gestiona dispositivos, listas y VPN Surfshark desde un único sitio.</p>
           </div>
           <button onClick={loadAll} style={styles.refreshButton}>Recargar datos</button>
+        </div>
+
+        <div style={styles.mobileCard}>
+          <div style={styles.mobileCardTop}>
+            <div>
+              <div style={styles.cardTitle}>Actualización de AchoTV</div>
+              <div style={styles.cardSub}>
+                Configura aquí la versión y la APK que podrán descargar los dispositivos desde la app.
+              </div>
+            </div>
+            <span style={styles.badgeOnline}>
+              Última: {formatDate(appConfigUpdatedAt)}
+            </span>
+          </div>
+
+          <div style={styles.doubleRow}>
+            <input
+              value={appConfigVersionCode}
+              onChange={(e) => setAppConfigVersionCode(e.target.value)}
+              placeholder="VersionCode"
+              style={styles.input}
+            />
+            <input
+              value={appConfigVersionName}
+              onChange={(e) => setAppConfigVersionName(e.target.value)}
+              placeholder="VersionName"
+              style={styles.input}
+            />
+          </div>
+
+          <input
+            value={appConfigApkUrl}
+            onChange={(e) => setAppConfigApkUrl(e.target.value)}
+            placeholder="https://.../app-release.apk"
+            style={styles.input}
+          />
+
+          <textarea
+            value={appConfigReleaseNotes}
+            onChange={(e) => setAppConfigReleaseNotes(e.target.value)}
+            placeholder="Novedades de esta versión"
+            style={styles.vpnTextarea}
+          />
+
+          <div style={styles.rowButtonsCompact}>
+            <button onClick={saveAppUpdateConfig} style={styles.buttonPrimary}>
+              Guardar actualización
+            </button>
+          </div>
         </div>
 
         <div style={styles.statsCompactRow}>
