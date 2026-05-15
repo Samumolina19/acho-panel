@@ -162,6 +162,11 @@ function getDeviceLabel(device: Device) {
   );
 }
 
+function getDeviceAppVersion(device: Device) {
+  const value = device.app_version?.trim();
+  return value && value.length > 0 ? value : "Sin reportar";
+}
+
 function getReportedLists(device?: Device | null): ReportedList[] {
   if (!device?.reported_lists || !Array.isArray(device.reported_lists)) return [];
   return device.reported_lists;
@@ -1116,6 +1121,10 @@ export default function Page() {
                       {getWatchingLabel(device)}
                     </div>
                     <div>
+                      <span style={styles.labelMini}>Versión app:</span>{" "}
+                      {getDeviceAppVersion(device)}
+                    </div>
+                    <div>
                       <span style={styles.labelMini}>Última:</span>{" "}
                       {formatDate(device.heartbeat_at || device.current_updated_at || device.last_seen)}
                     </div>
@@ -1304,6 +1313,10 @@ export default function Page() {
                     <div>
                       <span style={styles.labelMini}>Actualizada:</span>{" "}
                       {formatDate(device.vpn_config_updated_at)}
+                    </div>
+                    <div>
+                      <span style={styles.labelMini}>Versión app:</span>{" "}
+                      {getDeviceAppVersion(device)}
                     </div>
                     <div>
                       <span style={styles.labelMini}>Estado app:</span>{" "}
