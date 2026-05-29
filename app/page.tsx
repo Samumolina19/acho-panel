@@ -5,6 +5,8 @@ import { createClient } from "@supabase/supabase-js";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+const PANEL_ACCESS_CODE = process.env.NEXT_PUBLIC_PANEL_ACCESS_CODE?.trim() || "1208";
+const PANEL_ACCESS_STORAGE_KEY = "achotv-panel-access-ok";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -261,6 +263,10 @@ export default function Page() {
   const [appConfigReleaseNotes, setAppConfigReleaseNotes] = useState("");
   const [appConfigUpdatedAt, setAppConfigUpdatedAt] = useState("");
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [accessReady, setAccessReady] = useState(false);
+  const [isPanelUnlocked, setIsPanelUnlocked] = useState(false);
+  const [accessCode, setAccessCode] = useState("");
+  const [accessError, setAccessError] = useState("");
 
   const [, setNowTick] = useState(0);
 
@@ -278,6 +284,26 @@ export default function Page() {
 
   function notifyError(message: string) {
     showToast(message, "error");
+  }
+
+  function unlockPanel(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (accessCode.trim() !== PANEL_ACCESS_CODE) {
+      setAccessError("Código incorrecto. Revisa la clave del panel.");
+      return;
+    }
+
+    window.localStorage.setItem(PANEL_ACCESS_STORAGE_KEY, "true");
+    setAccessError("");
+    setIsPanelUnlocked(true);
+    showToast("Panel desbloqueado correctamente", "success");
+  }
+
+  function lockPanel() {
+    window.localStorage.removeItem(PANEL_ACCESS_STORAGE_KEY);
+    setIsPanelUnlocked(false);
+    setAccessCode("");
+    showToast("Panel bloqueado", "info");
   }
 
   async function loadAll() {
@@ -309,10 +335,19 @@ export default function Page() {
   }
 
   useEffect(() => {
-    loadAll();
+    const alreadyUnlocked = window.localStorage.getItem(PANEL_ACCESS_STORAGE_KEY) === "true";
+    setIsPanelUnlocked(alreadyUnlocked);
+    setAccessReady(true);
   }, []);
 
   useEffect(() => {
+    if (!accessReady || !isPanelUnlocked) return;
+    loadAll();
+  }, [accessReady, isPanelUnlocked]);
+
+  useEffect(() => {
+    if (!accessReady || !isPanelUnlocked) return;
+
     const channel = supabase
       .channel("acho-realtime-panel")
       .on("postgres_changes", { event: "*", schema: "public", table: "devices" }, () => loadAll())
@@ -323,7 +358,7 @@ export default function Page() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [accessReady, isPanelUnlocked]);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -922,6 +957,55 @@ export default function Page() {
     setVpnEditorConfig(device.vpn_config || "");
   }
 
+  if (!accessReady) {
+    return (
+      <div style={styles.page}>
+        <div style={styles.accessShell}>
+          <div style={styles.accessCard}>
+            <div style={styles.kicker}>AchoTV Panel</div>
+            <h1 style={styles.accessTitle}>Preparando acceso...</h1>
+            <p style={styles.accessText}>Estamos comprobando la sesión local del panel.</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isPanelUnlocked) {
+    return (
+      <div style={styles.page}>
+        <div style={styles.accessShell}>
+          <form onSubmit={unlockPanel} style={styles.accessCard}>
+            <div style={styles.kicker}>Acceso privado</div>
+            <h1 style={styles.accessTitle}>AchoTV Panel</h1>
+            <p style={styles.accessText}>
+              Introduce el código interno para gestionar dispositivos, listas, VPN y actualizaciones.
+            </p>
+
+            <input
+              value={accessCode}
+              onChange={(e) => {
+                setAccessCode(e.target.value);
+                setAccessError("");
+              }}
+              placeholder="Código del panel"
+              type="password"
+              autoComplete="current-password"
+              style={styles.accessInput}
+              autoFocus
+            />
+
+            {accessError && <p style={styles.error}>{accessError}</p>}
+
+            <button type="submit" style={styles.buttonPrimary}>
+              Entrar al panel
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
   const totalActiveDevices = devices.filter((d) => d.is_active).length;
   const totalActiveLists = lists.filter((l) => l.is_active).length;
   const totalOnlineDevices = devices.filter((d) => isDeviceReallyOnline(d)).length;
@@ -973,7 +1057,10 @@ export default function Page() {
             <h1 style={styles.title}>AchoTV Panel</h1>
             <p style={styles.subtitle}>Gestiona dispositivos, listas y VPN Surfshark desde un único sitio.</p>
           </div>
-          <button onClick={loadAll} style={styles.refreshButton}>Recargar datos</button>
+          <div style={styles.heroActions}>
+            <button onClick={loadAll} style={styles.refreshButton}>Recargar datos</button>
+            <button onClick={lockPanel} style={styles.lockButton}>Bloquear</button>
+          </div>
         </div>
 
         <div style={styles.mobileCard}>
@@ -1741,6 +1828,53 @@ const styles: Record<string, React.CSSProperties> = {
     margin: "0 auto",
   },
 
+  accessShell: {
+    minHeight: "calc(100vh - 32px)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  accessCard: {
+    width: "100%",
+    maxWidth: 420,
+    padding: 24,
+    borderRadius: 28,
+    border: "1px solid rgba(59,130,246,0.32)",
+    background:
+      "radial-gradient(circle at 20% 0%, rgba(37,99,235,0.38) 0, transparent 34%), linear-gradient(145deg, rgba(15,23,42,0.98), rgba(2,6,23,0.98))",
+    boxShadow: "0 24px 70px rgba(0,0,0,0.42)",
+    display: "flex",
+    flexDirection: "column",
+    gap: 14,
+  },
+
+  accessTitle: {
+    fontSize: 34,
+    fontWeight: 900,
+    margin: 0,
+    letterSpacing: -0.8,
+  },
+
+  accessText: {
+    color: "#a7b7d5",
+    fontSize: 14,
+    lineHeight: 1.5,
+    margin: 0,
+  },
+
+  accessInput: {
+    width: "100%",
+    padding: "15px 16px",
+    borderRadius: 16,
+    border: "1px solid rgba(96,165,250,0.42)",
+    background: "rgba(2,6,23,0.78)",
+    color: "#ffffff",
+    outline: "none",
+    fontSize: 16,
+    fontWeight: 700,
+  },
+
   heroCard: {
     display: "flex",
     justifyContent: "space-between",
@@ -1792,6 +1926,26 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid rgba(147,197,253,0.35)",
     background: "rgba(15,23,42,0.78)",
     color: "white",
+    cursor: "pointer",
+    fontWeight: 800,
+    fontSize: 13,
+    whiteSpace: "nowrap",
+  },
+
+  heroActions: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    flexWrap: "wrap",
+    justifyContent: "flex-end",
+  },
+
+  lockButton: {
+    padding: "12px 15px",
+    borderRadius: 14,
+    border: "1px solid rgba(248,113,113,0.32)",
+    background: "rgba(127,29,29,0.32)",
+    color: "#fecaca",
     cursor: "pointer",
     fontWeight: 800,
     fontSize: 13,
