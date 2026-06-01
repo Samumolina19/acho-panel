@@ -445,9 +445,23 @@ export default function Page() {
   }, [devices, search]);
 
   async function toggleDevice(id: string, active: boolean) {
-    const { error } = await supabase.from("devices").update({ is_active: !active }).eq("id", id);
-    if (error) return notifyError(error.message);
-    loadAll();
+    const nextActive = !active;
+    setDevices((current) =>
+      current.map((device) =>
+        device.id === id ? { ...device, is_active: nextActive } : device
+      )
+    );
+
+    const { error } = await supabase.from("devices").update({ is_active: nextActive }).eq("id", id);
+    if (error) {
+      setDevices((current) =>
+        current.map((device) =>
+          device.id === id ? { ...device, is_active: active } : device
+        )
+      );
+      return notifyError(error.message);
+    }
+
     showToast(active ? "Dispositivo desactivado" : "Dispositivo activado", "success");
   }
 
@@ -750,9 +764,23 @@ export default function Page() {
   }
 
   async function toggleList(id: string, active: boolean) {
-    const { error } = await supabase.from("xtream_lists").update({ is_active: !active }).eq("id", id);
-    if (error) return notifyError(error.message);
-    loadAll();
+    const nextActive = !active;
+    setLists((current) =>
+      current.map((list) =>
+        list.id === id ? { ...list, is_active: nextActive } : list
+      )
+    );
+
+    const { error } = await supabase.from("xtream_lists").update({ is_active: nextActive }).eq("id", id);
+    if (error) {
+      setLists((current) =>
+        current.map((list) =>
+          list.id === id ? { ...list, is_active: active } : list
+        )
+      );
+      return notifyError(error.message);
+    }
+
     showToast(active ? "Lista desactivada" : "Lista activada", "success");
   }
 
