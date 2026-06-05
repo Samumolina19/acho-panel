@@ -1,14 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { createClient } from "@supabase/supabase-js";
 
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const PANEL_ACCESS_CODE = process.env.NEXT_PUBLIC_PANEL_ACCESS_CODE?.trim() || "1208";
 const PANEL_ACCESS_STORAGE_KEY = "achotv-panel-access-ok";
-
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 type Device = {
   id: string;
@@ -74,6 +69,8 @@ type AppConfig = {
   updated_at?: string | null;
 };
 
+type PanelTable = "devices" | "xtream_lists" | "device_list_assignments" | "app_config";
+
 type ToastType = "success" | "error" | "info";
 
 type ToastItem = {
@@ -81,6 +78,200 @@ type ToastItem = {
   message: string;
   type: ToastType;
 };
+
+async function panelApi(action: string, payload: Record<string, unknown> = {}) {
+  const response = await fetch("/api/panel", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-panel-code": PANEL_ACCESS_CODE,
+    },
+    body: JSON.stringify({ action, panelCode: PANEL_ACCESS_CODE, ...payload }),
+  });
+
+  const text = await response.text();
+  const data = text ? JSON.parse(text) : {};
+  if (!response.ok || data?.error) {
+    throw new Error(data?.error || `HTTP ${response.status}`);
+  }
+  return data;
+}
+
+function createPanelClient() {
+  return {
+    from(table: PanelTable) {
+      return new PanelQuery(table);
+    },
+    channel() {
+      return {
+        on() {
+          return this;
+        },
+        subscribe() {
+          return this;
+        },
+      };
+    },
+    removeChannel() {
+      return undefined;
+    },
+  };
+}
+
+class PanelQuery {
+  private operation: "select" | "insert" | "update" | "delete" | "upsert" = "select";
+  private filters: Array<[string, unknown]> = [];
+  private orderField = "";
+  private orderAscending = true;
+  private limitCount = 0;
+  private returnSingle = false;
+  private returnMaybeSingle = false;
+  private input: unknown;
+
+  constructor(private table: PanelTable) {}
+
+  select(..._args: unknown[]) {
+    return this;
+  }
+
+  order(field: string, options?: { ascending?: boolean }) {
+    this.orderField = field;
+    this.orderAscending = options?.ascending !== false;
+    return this;
+  }
+
+  eq(field: string, value: unknown) {
+    this.filters.push([field, value]);
+    return this;
+  }
+
+  limit(value: number) {
+    this.limitCount = value;
+    return this;
+  }
+
+  maybeSingle() {
+    this.returnMaybeSingle = true;
+    return this;
+  }
+
+  single() {
+    this.returnSingle = true;
+    return this;
+  }
+
+  insert(input: unknown) {
+    this.operation = "insert";
+    this.input = input;
+    return this;
+  }
+
+  update(input: unknown) {
+    this.operation = "update";
+    this.input = input;
+    return this;
+  }
+
+  upsert(input: unknown) {
+    this.operation = "upsert";
+    this.input = input;
+    return this;
+  }
+
+  delete() {
+    this.operation = "delete";
+    return this;
+  }
+
+  then(resolve: (value: any) => void, reject: (reason?: any) => void) {
+    return this.execute().then(resolve, reject);
+  }
+
+  private async execute() {
+    try {
+      if (this.operation === "select") {
+        return { data: await this.selectData(), error: null };
+      }
+
+      if (this.operation === "insert") {
+        const response = await panelApi("insert", { table: this.table, rows: this.input });
+        return { data: response.data ?? null, error: null };
+      }
+
+      if (this.operation === "upsert") {
+        const row = this.input as Record<string, unknown>;
+        const id = String(row?.id || "main");
+        const { id: _id, ...patch } = row || {};
+        await panelApi("update", { table: this.table, id, patch });
+        return { data: null, error: null };
+      }
+
+      if (this.operation === "update") {
+        const id = this.valueFor("id");
+        if (!id) throw new Error("Falta id para actualizar");
+        await panelApi("update", { table: this.table, id, patch: this.input });
+        return { data: null, error: null };
+      }
+
+      if (this.operation === "delete") {
+        const [field, value] = this.filters[0] || [];
+        if (!field) throw new Error("Falta filtro para borrar");
+        await panelApi("delete", { table: this.table, where: { [field]: value } });
+        return { data: null, error: null };
+      }
+
+      return { data: null, error: null };
+    } catch (error) {
+      return {
+        data: null,
+        error: { message: error instanceof Error ? error.message : "Error del panel" },
+      };
+    }
+  }
+
+  private async selectData() {
+    const snapshot = await panelApi("snapshot");
+    const source =
+      this.table === "devices"
+        ? snapshot.devices || []
+        : this.table === "xtream_lists"
+          ? snapshot.lists || []
+          : this.table === "device_list_assignments"
+            ? snapshot.assignments || []
+            : snapshot.appConfig
+              ? [snapshot.appConfig]
+              : [];
+
+    let rows = [...source];
+    for (const [field, value] of this.filters) {
+      rows = rows.filter((row: any) => row?.[field] === value);
+    }
+
+    if (this.orderField) {
+      rows.sort((a: any, b: any) => {
+        const left = String(a?.[this.orderField] || "");
+        const right = String(b?.[this.orderField] || "");
+        return this.orderAscending ? left.localeCompare(right) : right.localeCompare(left);
+      });
+    }
+
+    if (this.limitCount > 0) {
+      rows = rows.slice(0, this.limitCount);
+    }
+
+    if (this.returnSingle || this.returnMaybeSingle) {
+      return rows[0] ?? null;
+    }
+
+    return rows;
+  }
+
+  private valueFor(field: string) {
+    return this.filters.find(([key]) => key === field)?.[1];
+  }
+}
+
+const supabase = createPanelClient();
 
 function formatDate(value?: string | null) {
   if (!value) return "-";
@@ -348,15 +539,12 @@ export default function Page() {
   useEffect(() => {
     if (!accessReady || !isPanelUnlocked) return;
 
-    const channel = supabase
-      .channel("acho-realtime-panel")
-      .on("postgres_changes", { event: "*", schema: "public", table: "devices" }, () => loadAll())
-      .on("postgres_changes", { event: "*", schema: "public", table: "xtream_lists" }, () => loadAll())
-      .on("postgres_changes", { event: "*", schema: "public", table: "device_list_assignments" }, () => loadAll())
-      .subscribe();
+    const interval = window.setInterval(() => {
+      loadAll();
+    }, 15000);
 
     return () => {
-      supabase.removeChannel(channel);
+      window.clearInterval(interval);
     };
   }, [accessReady, isPanelUnlocked]);
 

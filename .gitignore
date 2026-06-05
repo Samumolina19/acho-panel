@@ -33,6 +33,12 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
+# local migration exports/backups with private device, VPN and IPTV credentials
+supabase-export.json
+cloudflare-d1-import*.sql
+cloudflare-d1-0*.sql
+d1-import-steps/
+
 # vercel
 .vercel
 

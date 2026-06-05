@@ -1,0 +1,8 @@
+name = "acho-panel"
+compatibility_date = "2026-06-05"
+pages_build_output_dir = "out"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "acho-panel-db"
+database_id = "PEGA_AQUI_EL_DATABASE_ID_REAL"
