@@ -62,7 +62,6 @@ async function consumeForceSync(db: any, body: any) {
 async function syncLocalLists(db: any, body: any) {
   const device = await getOrCreateDevice(db, body);
   const accounts = Array.isArray(body.accounts) ? body.accounts : [];
-  const localKeys = new Set(accounts.map((account: any) => listKey(account.server, account.username)));
 
   for (const account of accounts) {
     const server = clean(account.server);
@@ -103,30 +102,9 @@ async function syncLocalLists(db: any, body: any) {
     }
   }
 
-  const assignments = await db
-    .prepare(
-      "select a.id assignment_id, l.id list_id, l.server, l.username from device_list_assignments a join xtream_lists l on l.id = a.xtream_list_id where a.device_id = ?"
-    )
-    .bind(device.id)
-    .all();
-
-  for (const row of assignments.results || []) {
-    if (localKeys.has(listKey(row.server, row.username))) continue;
-    await db.prepare("delete from device_list_assignments where id = ?").bind(row.assignment_id).run();
-    const stillUsed = await db
-      .prepare("select id from device_list_assignments where xtream_list_id = ? limit 1")
-      .bind(row.list_id)
-      .first();
-    if (!stillUsed) await db.prepare("delete from xtream_lists where id = ?").bind(row.list_id).run();
-  }
-
   return { ok: true };
 }
 
 function clean(value: any) {
   return String(value || "").trim();
-}
-
-function listKey(server: string, username: string) {
-  return `${clean(server).toLowerCase()}|${clean(username).toLowerCase()}`;
 }
