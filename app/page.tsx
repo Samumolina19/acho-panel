@@ -851,6 +851,28 @@ export default function Page() {
     showToast(`Sincronización solicitada para ${getDeviceLabel(device)}`, "success");
   }
 
+  async function requestDeviceSync(deviceId: string) {
+    if (!deviceId) return;
+    await supabase
+      .from("devices")
+      .update({
+        sync_requested_at: new Date().toISOString(),
+      })
+      .eq("id", deviceId);
+  }
+
+  async function requestSyncForList(listId: string) {
+    const affectedDeviceIds = Array.from(
+      new Set(
+        assignments
+          .filter((assignment) => assignment.xtream_list_id === listId)
+          .map((assignment) => assignment.device_id)
+      )
+    );
+
+    await Promise.all(affectedDeviceIds.map((deviceId) => requestDeviceSync(deviceId)));
+  }
+
   async function saveAppUpdateConfig() {
     const versionCode = Number(appConfigVersionCode.trim());
     if (!Number.isFinite(versionCode) || versionCode <= 0) {
@@ -969,11 +991,13 @@ export default function Page() {
       return notifyError(error.message);
     }
 
+    await requestSyncForList(id);
     showToast(active ? "Lista desactivada" : "Lista activada", "success");
   }
 
   async function deleteList(id: string) {
     if (!window.confirm("¿Eliminar esta lista?")) return;
+    await requestSyncForList(id);
     const { error } = await supabase.from("xtream_lists").delete().eq("id", id);
     if (error) return notifyError(error.message);
     loadAll();
@@ -1012,6 +1036,7 @@ export default function Page() {
       .eq("id", id);
 
     if (error) return notifyError(error.message);
+    await requestSyncForList(id);
     cancelEditList();
     loadAll();
     showToast("Lista actualizada", "success");
@@ -1030,6 +1055,7 @@ export default function Page() {
     });
 
     if (error) return notifyError(error.message);
+    await requestDeviceSync(selectedDeviceId);
     setSelectedDeviceId("");
     setSelectedListId("");
     loadAll();
@@ -1048,6 +1074,7 @@ export default function Page() {
     });
 
     if (error) return notifyError(error.message);
+    await requestDeviceSync(deviceId);
     setManageListId("");
     loadAll();
     showToast("Lista añadida al dispositivo", "success");
@@ -1055,8 +1082,12 @@ export default function Page() {
 
   async function deleteAssignment(id: string) {
     if (!window.confirm("¿Quitar esta lista del dispositivo?")) return;
+    const assignment = assignments.find((item) => item.id === id);
     const { error } = await supabase.from("device_list_assignments").delete().eq("id", id);
     if (error) return notifyError(error.message);
+    if (assignment?.device_id) {
+      await requestDeviceSync(assignment.device_id);
+    }
     loadAll();
     showToast("Lista quitada del dispositivo", "success");
   }
@@ -1088,6 +1119,7 @@ export default function Page() {
     });
 
     if (assignRes.error) return notifyError(assignRes.error.message);
+    await requestDeviceSync(deviceId);
 
     setRemoteAlias("");
     setRemoteServer("");
@@ -1148,6 +1180,7 @@ export default function Page() {
       .eq("id", id);
 
     if (error) return notifyError(error.message);
+    await requestSyncForList(id);
     cancelManageEditList();
     loadAll();
     showToast("Lista actualizada", "success");
