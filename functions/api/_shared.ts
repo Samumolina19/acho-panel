@@ -107,7 +107,7 @@ export async function getOrCreateDevice(db: D1Database, payload: any) {
 export async function getAssignedActiveLists(db: D1Database, deviceId: string) {
   const rows = await db
     .prepare(
-      "select l.* from device_list_assignments a join xtream_lists l on l.id = a.xtream_list_id where a.device_id = ? and coalesce(nullif(lower(cast(l.is_active as text)), ''), '1') not in ('0', 'false', 'no') order by l.created_at desc"
+      "select l.* from device_list_assignments a join xtream_lists l on l.id = a.xtream_list_id where a.device_id = ? order by l.created_at desc"
     )
     .bind(deviceId)
     .all();
