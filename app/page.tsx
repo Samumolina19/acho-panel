@@ -650,6 +650,7 @@ export default function Page() {
       return notifyError(error.message);
     }
 
+    await requestDeviceSync(id);
     showToast(active ? "Dispositivo desactivado" : "Dispositivo activado", "success");
   }
 
