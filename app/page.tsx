@@ -1049,6 +1049,8 @@ export default function Page() {
     const exists = assignments.some((a) => a.device_id === selectedDeviceId && a.xtream_list_id === selectedListId);
     if (exists) return notifyError("Esa lista ya está asignada a ese dispositivo");
 
+    await supabase.from("xtream_lists").update({ is_active: true }).eq("id", selectedListId);
+
     const { error } = await supabase.from("device_list_assignments").insert({
       device_id: selectedDeviceId,
       xtream_list_id: selectedListId,
@@ -1067,6 +1069,8 @@ export default function Page() {
 
     const exists = assignments.some((a) => a.device_id === deviceId && a.xtream_list_id === listId);
     if (exists) return notifyError("Esa lista ya está asignada a ese dispositivo");
+
+    await supabase.from("xtream_lists").update({ is_active: true }).eq("id", listId);
 
     const { error } = await supabase.from("device_list_assignments").insert({
       device_id: deviceId,
