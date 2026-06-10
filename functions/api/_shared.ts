@@ -30,20 +30,30 @@ export function boolToInt(value: any) {
   return value ? 1 : 0;
 }
 
+export function flagFromDb(value: any) {
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return normalized !== "" && normalized !== "0" && normalized !== "false" && normalized !== "no";
+  }
+  return !!value;
+}
+
 export function normalizeDevice(row: any) {
   if (!row) return row;
   return {
     ...row,
-    is_active: !!row.is_active,
-    is_online: !!row.is_online,
-    is_permanent: !!row.is_permanent,
+    is_active: flagFromDb(row.is_active),
+    is_online: flagFromDb(row.is_online),
+    is_permanent: flagFromDb(row.is_permanent),
     reported_lists: parseJson(row.reported_lists, []),
   };
 }
 
 export function normalizeList(row: any) {
   if (!row) return row;
-  return { ...row, is_active: !!row.is_active };
+  return { ...row, is_active: flagFromDb(row.is_active) };
 }
 
 export async function getOrCreateDevice(db: D1Database, payload: any) {
@@ -97,7 +107,7 @@ export async function getOrCreateDevice(db: D1Database, payload: any) {
 export async function getAssignedActiveLists(db: D1Database, deviceId: string) {
   const rows = await db
     .prepare(
-      "select l.* from device_list_assignments a join xtream_lists l on l.id = a.xtream_list_id where a.device_id = ? and l.is_active = 1 order by l.created_at desc"
+      "select l.* from device_list_assignments a join xtream_lists l on l.id = a.xtream_list_id where a.device_id = ? and coalesce(nullif(lower(cast(l.is_active as text)), ''), '1') not in ('0', 'false', 'no') order by l.created_at desc"
     )
     .bind(deviceId)
     .all();
